@@ -9,3 +9,9 @@
 3. 用`uv init`初始化环境
 4. 用`uv run pdf_maker.py`执行pdf生成（可在`config.ini`中配置相关配置)
 5. 结果输出到`output/`下# exercise-book-generator
+
+测试环境：
+- MacOS M1
+- 需要在本机用`brew install imagemagick`以使用其提供的api
+- 本机测试用的是`python3`
+- 需要`uv`cli的支持
