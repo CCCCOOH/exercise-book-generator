@@ -6,4 +6,12 @@
 .history
 images*
 output*
+input/
 .venv/
+
+# 打包产物
+build/
+buildenv/
+dist/
+*.spec
+.DS_Store
