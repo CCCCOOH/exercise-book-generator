@@ -1,4 +1,43 @@
-## SYNC 做题本生成器
+## SYNC 题本神器
+
+<table align="center" width="100%">
+  <tr>
+    <td align="center" width="33.33%">
+      <img src="./assets/IMG_2178.PNG" alt="做题本生成器界面1" width="100%"/>
+      <br/>
+      <b>选中卡片导出</b>
+    </td>
+    <td align="center" width="33.33%">
+      <img src="./assets/IMG_2179.PNG" alt="做题本生成器界面2" width="100%"/>
+      <br/>
+      <b>导出为pdf</b>
+    </td>
+    <td align="center" width="33.33%">
+      <img src="./assets/IMG_2180.PNG" alt="做题本生成器界面3" width="100%"/>
+      <br/>
+      <b>分享并保存pdf</b>
+    </td>
+  </tr>
+</table>
+
+选择MarginNote中导出的卡片集pdf作为`输入PDF文件`，选择纸张大小和每张纸的题目数据（越多越省纸，但空间更小）。
+
+![alt text](./assets/image.png)
+
+完成后打开输出目录获得成品！~
+
+
+<table align="center" width="100%">
+  <tr>
+    <td align="center" width="50%">
+      <img src="./assets/finder.png" alt="做题本生成器界面1" width="100%"/>
+    </td>
+    <td align="center" width="50%">
+      <img src="./assets/pdf.png" alt="做题本生成器界面2" width="100%"/>
+    </td>
+  </tr>
+</table>
+
 
 根据pdf_maker.py一键生成做题本以供打印刷题。**输出纸张可在界面预设中选择**（A4、B5、A5、B4、
 A3、A6、Letter、Legal，默认A4=210×297mm），每张纸可配 N 道题（`[排版参数] 每页题目数`，默认2），
