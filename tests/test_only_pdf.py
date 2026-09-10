@@ -5,7 +5,7 @@
 tests/test_only_pdf.py —— 「只生成pdf文件」开关的回归测试
 ========================================================
 
-覆盖 pdf_maker.py 的步骤4（清理 pages/ 与 layout/）：
+覆盖 core/pdf_engine.py 的步骤4（清理 pages/ 与 layout/）：
 
     A. 勾选 + 三步全开        → 输出目录只剩最终PDF
     B. 不勾选（默认）          → pages/ 与 layout/ 保留
@@ -29,7 +29,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
-ENGINE = ROOT / "pdf_maker.py"
+ENGINE = ROOT / "core" / "pdf_engine.py"
 
 CONFIG = """[步骤控制]
 执行_pdf转图片 = {pdf2img}

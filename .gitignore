@@ -7,6 +7,8 @@ images*
 output*
 input/
 .venv/
+__pycache__/
+*.py[cod]
 
 # 打包产物
 build/

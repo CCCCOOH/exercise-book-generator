@@ -5,13 +5,13 @@
 pdf_maker_gui.py — “做题本 PDF 生成工具”图形界面封装
 =====================================================
 
-把 pdf_maker.py 的命令行流程封装成一个 tkinter 图形界面：
+把 core/pdf_engine.py 的命令行流程封装成一个 tkinter 图形界面：
 
-    * 选择输入PDF文件（每页=一张卡片）与输出文件夹；旧方式（直接用JPG文件夹）也可用
-    * 勾选要执行的步骤（PDF转图片 → 排版A4 → 合并PDF）
+    * 选择输入形式：PDF 文件（每页=一张卡片）或图片文件夹
+    * 自动完成导入、排版、合并，生成完整做题本 PDF
     * 可勾选「只生成 PDF 文件」：脚本结束后自动删除 pages/ 与 layout/ 中间文件夹
     * 修改全部参数（纸张预设 A4/B5/A5…、每张纸题目数、PDF文件名…；DPI/间距/压缩质量保留在 config.ini 默认值，可按需微调）
-    * 「开始生成」前自动把界面参数写回 config.ini，再后台运行 pdf_maker.py
+    * 「开始生成」前自动把界面参数写回 config.ini，再后台运行 core/pdf_engine.py
     * 日志实时显示，运行中可随时「停止」
 
 运行方式（项目目录内，macOS）：
@@ -34,6 +34,26 @@ import sys
 import threading
 from pathlib import Path
 
+# 统一入口：CLI 在加载 Tk 之前分流，兼容没有 Tk 的引擎虚拟环境。
+if __name__ == "__main__" and "--cli" in sys.argv[1:]:
+    import argparse
+    from core.pdf_engine import engine_main
+
+    parser = argparse.ArgumentParser(description="做题本 PDF 生成工具")
+    parser.add_argument("--cli", action="store_true")
+    parser.add_argument("--config", type=Path)
+    args = parser.parse_args()
+    config_path = args.config
+    if config_path is None:
+        if getattr(sys, "frozen", False):
+            data_root = (Path.home() / "Library" / "Application Support" if sys.platform == "darwin"
+                         else Path(os.environ.get("APPDATA", str(Path.home()))))
+            config_path = data_root / "ZuotiBenPdfTool" / "config.ini"
+        else:
+            config_path = Path(__file__).resolve().parent / "config.ini"
+    sys.exit(0 if engine_main(str(config_path)) else 1)
+
+
 try:
     import tkinter as tk
     from tkinter import filedialog, messagebox, scrolledtext, ttk
@@ -46,12 +66,12 @@ except ImportError:  # pragma: no cover - 提示用户用对的解释器
 
 
 # ============================================================
-# 常量：与 pdf_maker.py / config.ini 保持一致
+# 常量：与 core/pdf_engine.py / config.ini 保持一致
 # ============================================================
 
 APP_DIR = Path(__file__).resolve().parent
 DEFAULT_CONFIG_PATH = APP_DIR / "config.ini"
-DEFAULT_PDF_MAKER = APP_DIR / "pdf_maker.py"
+DEFAULT_PDF_MAKER = APP_DIR / "core" / "pdf_engine.py"
 APP_DATA_NAME = "ZuotiBenPdfTool"   # 打包后的用户数据目录名
 
 
@@ -92,6 +112,7 @@ DEFAULTS = {
         "执行_合并pdf": "true",
     },
     "路径设置": {
+        "输入类型": "pdf",
         "输入pdf文件": "",
         "输入文件夹": "./images",
         "输出文件夹": "./output",
@@ -112,9 +133,14 @@ DEFAULTS = {
     },
 }
 
+# 输入形式（写入 config.ini 的 输入类型）
+INPUT_TYPE_PDF = "pdf"
+INPUT_TYPE_FOLDER = "folder"
+IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff"}
+
 # (section, key, 标签, 类型)
 # 类型: 'dir' = 目录选择框；'str' = 普通文本
-# 输入PDF行与旧版JPG文件夹行在界面里按“PDF转图片”开关动态切换
+# 输入PDF行与图片文件夹行在界面里按“输入形式”动态切换
 PATH_FIELDS = [
     ("路径设置", "输出文件夹", "输出文件夹", "dir"),
     ("路径设置", "pdf文件名", "PDF 文件名", "str"),
@@ -132,26 +158,24 @@ PAPER_PRESETS = [
 ]
 PAPER_NAMES = [name for name, _, _ in PAPER_PRESETS]
 
-# GUI 中需要输入校验的整数项
-INT_FIELDS = [
-    ("排版参数", "每页题目数", "每张纸题目数"),
-]
-
-# 步骤开关（顺序与 pdf_maker.py 主流程一致）
-STEPS = [
-    ("执行_pdf转图片", "从 PDF 提取页面为图片（每页=一张卡片）"),
-    ("执行_排版页面", "排版为所选纸张（每张 N 题、格内顶部对齐）"),
-    ("执行_合并pdf", "合并为单个 PDF"),
-]
-
-
 # ============================================================
 # 配置读写（与 GUI 解耦，便于测试/复用）
 # ============================================================
 
+def normalize_input_type(value):
+    """把配置里的输入类型统一为 pdf 或 folder。"""
+    value = str(value or "").strip().casefold()
+    if value in {"pdf", "pdf文件", "file"}:
+        return INPUT_TYPE_PDF
+    if value in {"folder", "dir", "directory", "images", "image_folder",
+                 "文件夹", "图片文件夹"}:
+        return INPUT_TYPE_FOLDER
+    return ""
+
+
 def load_config_dict(config_path):
     """读取 config.ini -> {(section, key): value}，缺省值补 DEFAULT。"""
-    cfg = configparser.ConfigParser()
+    cfg = configparser.ConfigParser(interpolation=None)
     if Path(config_path).exists():
         cfg.read(Path(config_path), encoding="utf-8")
     result = {}
@@ -160,7 +184,16 @@ def load_config_dict(config_path):
             try:
                 result[(section, key)] = cfg.get(section, key)
             except (configparser.NoSectionError, configparser.NoOptionError):
-                result[(section, key)] = default
+                value = default
+                # 旧配置没有“输入类型”：按原来的 PDF 转图片开关推断。
+                if (section, key) == ("路径设置", "输入类型"):
+                    try:
+                        pdf_enabled = cfg.getboolean("步骤控制", "执行_pdf转图片")
+                    except (configparser.NoSectionError, configparser.NoOptionError,
+                            ValueError):
+                        pdf_enabled = True
+                    value = INPUT_TYPE_PDF if pdf_enabled else INPUT_TYPE_FOLDER
+                result[(section, key)] = value
     return result
 
 
@@ -169,7 +202,7 @@ def write_config(config_path, values):
     config_path = Path(config_path)
     config_path.parent.mkdir(parents=True, exist_ok=True)
 
-    cfg = configparser.ConfigParser()
+    cfg = configparser.ConfigParser(interpolation=None)
     if config_path.exists():
         cfg.read(config_path, encoding="utf-8")
 
@@ -226,279 +259,220 @@ class PdfMakerGUI:
     # ---------------- 界面构建 ----------------
 
     def _build_ui(self):
-        self.root.title("做题本 PDF 生成工具")
-        self.root.geometry("960x800")
-        self.root.minsize(880, 660)
+        self.root.title("SYNC · 做题本")
+        self.root.geometry("1120x820")
+        self.root.minsize(980, 740)
+        self.root.configure(bg="#ffffff")
+        self.font = "PingFang SC" if sys.platform == "darwin" else "Microsoft YaHei UI"
+        style = ttk.Style(self.root)
+        style.theme_use("clam")
+        style.configure(".", font=(self.font, 12), background="#ffffff", foreground="#292929")
+        style.configure("TFrame", background="#ffffff")
+        style.configure("TLabel", background="#ffffff")
+        style.configure("Hint.TLabel", foreground="#808080", font=(self.font, 11))
+        style.configure("Section.TLabel", font=(self.font, 13, "bold"))
+        style.configure("TEntry", padding=9, fieldbackground="#fafafa", bordercolor="#e5e5e5", lightcolor="#e5e5e5", darkcolor="#e5e5e5")
+        style.configure("TCombobox", padding=8, fieldbackground="#fafafa", arrowsize=14)
+        style.map("TCombobox", fieldbackground=[("readonly", "#fafafa")], selectbackground=[("readonly", "#fafafa")], selectforeground=[("readonly", "#292929")])
+        style.configure("TButton", padding=(14, 9), background="#f3f3f3", borderwidth=0, focusthickness=0)
+        style.map("TButton", background=[("active", "#e8e8e8")])
+        style.configure("Primary.TButton", background="#252525", foreground="#ffffff", font=(self.font, 12, "bold"), padding=(22, 12))
+        style.map("Primary.TButton", background=[("disabled", "#cccccc"), ("active", "#444444")], foreground=[("disabled", "#ffffff")])
+        style.configure("Source.TRadiobutton", padding=(14, 12), background="#f5f5f5", indicatorrelief="flat")
+        style.map("Source.TRadiobutton", background=[("selected", "#e5eee9"), ("active", "#eeeeee")])
+        style.configure("TCheckbutton", background="#ffffff", padding=4)
+        style.configure("TProgressbar", troughcolor="#f1f1f1", background="#33836c", borderwidth=0, thickness=4)
 
-        style = ttk.Style()
-        try:  # 非 macOS 平台可用 clam 主题，观感更统一
-            if style.theme_use() == "default":
-                style.theme_use("clam")
-        except tk.TclError:
-            pass
-        style.configure("Title.TLabel", font=("Helvetica", 16, "bold"))
-        style.configure("Hint.TLabel", foreground="#666666")
+        sidebar = tk.Frame(self.root, bg="#f7f7f8", width=200)
+        sidebar.pack(side="left", fill="y")
+        sidebar.pack_propagate(False)
+        tk.Label(sidebar, text="◈  SYNC", bg="#f7f7f8", fg="#222222", font=(self.font, 21, "bold")).pack(anchor="w", padx=22, pady=(28, 4))
+        tk.Label(sidebar, text="你的专属做题空间", bg="#f7f7f8", fg="#888888", font=(self.font, 11)).pack(anchor="w", padx=22)
+        tk.Label(sidebar, text="▤   制作做题本", bg="#e9e9eb", fg="#252525", font=(self.font, 12), anchor="w", padx=14, pady=12).pack(fill="x", padx=12, pady=(36, 8))
+        ttk.Button(sidebar, text="打开输出文件夹", command=self.open_output_dir).pack(fill="x", padx=12, pady=4)
+        save = ttk.Button(sidebar, text="保存当前设置", command=self.save_config)
+        save.pack(fill="x", padx=12, pady=4)
+        self.lock_widgets.append(save)
+        tk.Label(sidebar, text="本地处理 · 专注练习\n题目文件留在你的设备上", justify="left", bg="#f7f7f8", fg="#969696", font=(self.font, 10)).pack(side="bottom", anchor="w", padx=22, pady=24)
 
-        # ---- 顶部标题 ----
-        header = ttk.Frame(self.root, padding=(14, 10, 14, 0))
-        header.pack(fill="x")
-        ttk.Label(header, text="📄 做题本 PDF 生成工具", style="Title.TLabel").pack(anchor="w")
-        ttk.Label(
-            header,
-            text="pdf_maker.py 图形化封装 · 「开始生成」前会自动保存到 config.ini · 参数同步，命令行仍可用",
-            style="Hint.TLabel",
-        ).pack(anchor="w", pady=(2, 0))
+        main = ttk.Frame(self.root, padding=(32, 18, 32, 16))
+        main.pack(side="left", fill="both", expand=True)
+        ttk.Label(main, text="做题本工作台", style="Hint.TLabel").pack(anchor="w")
+        ttk.Label(main, text="把题目，变成你的下一次进步。", font=(self.font, 24, "bold")).pack(anchor="w", pady=(16, 6))
+        ttk.Label(main, text="导入题目卡片，设置纸张与留白，一键生成适合打印的 PDF。", style="Hint.TLabel").pack(anchor="w", pady=(0, 22))
 
-        # ---- 主体两栏 ----
-        body = ttk.Frame(self.root, padding=(14, 8))
-        body.pack(fill="both", expand=True)
+        body = ttk.Frame(main)
+        body.pack(fill="x")
         body.columnconfigure(0, weight=1)
-        body.columnconfigure(1, weight=1)
-        body.rowconfigure(0, weight=1)
+        body.columnconfigure(1, minsize=220)
+        editor = ttk.Frame(body)
+        editor.grid(row=0, column=0, sticky="nsew", padx=(0, 28))
+        self._build_path_frame(editor).pack(fill="x")
+        self._build_paper_frame(editor).pack(fill="x", pady=(16, 0))
+        self._build_output_frame(editor).pack(fill="x", pady=(16, 0))
 
-        left = ttk.Frame(body)
-        left.grid(row=0, column=0, sticky="nsew", padx=(0, 7))
-        right = ttk.Frame(body)
-        right.grid(row=0, column=1, sticky="nsew", padx=(7, 0))
+        preview = ttk.Frame(body)
+        preview.grid(row=0, column=1, sticky="n")
+        ttk.Label(preview, text="排版示意", style="Section.TLabel").pack(anchor="w")
+        self.preview = tk.Canvas(preview, width=220, height=285, bg="#f7f7f8", highlightthickness=0)
+        self.preview.pack(pady=(12, 8))
+        self.var_summary = tk.StringVar()
+        ttk.Label(preview, textvariable=self.var_summary, style="Hint.TLabel", justify="center").pack()
+        ttk.Label(preview, text="题目顶部对齐\n下方留白，思路自由展开", style="Hint.TLabel", justify="center").pack(pady=(14, 0))
+        self.var_paper.trace_add("write", self._refresh_preview)
+        self.vars[("排版参数", "每页题目数")].trace_add("write", self._refresh_preview)
+        self._sync_input_rows()
+        self._refresh_preview()
 
-        self._build_path_frame(left).pack(fill="x")
-        self._build_steps_frame(left).pack(fill="x", pady=(8, 0))
-        self._build_output_frame(left).pack(fill="x", pady=(8, 0))
-        self._build_paper_frame(right).pack(fill="x")
-        self._build_layout_frame(right).pack(fill="x", pady=(8, 0))
-        self._sync_input_rows()  # 按“从PDF提取页面”开关初始化输入行显隐
-
-        # ---- 按钮区 ----
-        btns = ttk.Frame(self.root, padding=(14, 0))
-        btns.pack(fill="x")
-        self.btn_start = ttk.Button(btns, text="▶  开始生成", command=self.start_run)
-        self.btn_start.pack(side="left")
-        self.btn_stop = ttk.Button(btns, text="⏹  停止", command=self.stop_run, state="disabled")
-        self.btn_stop.pack(side="left", padx=(8, 0))
-        ttk.Button(btns, text="💾  保存配置", command=self.save_config).pack(side="left", padx=(18, 0))
-        ttk.Button(btns, text="📂  打开输出目录", command=self.open_output_dir).pack(side="left", padx=(8, 0))
-
-        # ---- 状态区 ----
-        status = ttk.Frame(self.root, padding=(14, 8, 14, 4))
-        status.pack(fill="x")
-        self.var_status = tk.StringVar(value="就绪：改完参数后点「开始生成」（会自动保存配置）")
-        ttk.Label(status, textvariable=self.var_status).pack(side="left")
-        self.progress = ttk.Progressbar(status, mode="indeterminate", length=140)
-        self.progress.pack(side="right")
-
-        # ---- 日志区 ----
-        log_frame = ttk.LabelFrame(self.root, text="运行日志", padding=(8, 4))
-        log_frame.pack(fill="both", expand=True, padx=14, pady=(4, 12))
-        self.log = scrolledtext.ScrolledText(
-            log_frame, height=11, state="disabled", wrap="word", font=("Menlo", 11)
-        )
+        actions = ttk.Frame(main)
+        actions.pack(fill="x", pady=(16, 10))
+        self.btn_start = ttk.Button(actions, text="生成做题本  ↑", style="Primary.TButton", command=self.start_run)
+        self.btn_start.pack(side="right")
+        self.btn_stop = ttk.Button(actions, text="停止", command=self.stop_run, state="disabled")
+        self.btn_stop.pack(side="right", padx=8)
+        self.var_status = tk.StringVar(value="准备就绪，选择题目来源即可开始")
+        ttk.Label(actions, textvariable=self.var_status, style="Hint.TLabel", wraplength=440).pack(side="left")
+        self.progress = ttk.Progressbar(main, mode="indeterminate")
+        self.progress.pack(fill="x", pady=(0, 12))
+        ttk.Label(main, text="生成记录", style="Hint.TLabel").pack(anchor="w", pady=(0, 6))
+        self.log = scrolledtext.ScrolledText(main, height=5, state="disabled", wrap="word", font=(self.font, 11), bg="#fafafa", fg="#606060", relief="flat", borderwidth=0, padx=12, pady=10, highlightthickness=1, highlightbackground="#eeeeee")
         self.log.pack(fill="both", expand=True)
-        self.log.tag_configure("ok", foreground="#1a7f37")
-        self.log.tag_configure("err", foreground="#cf222e")
-        self.log.tag_configure("warn", foreground="#bf8700")
-        self.log.tag_configure("title", foreground="#0969da")
-        self.log.tag_configure("dim", foreground="#999999")
+        for tag, color in {"ok": "#28745b", "err": "#b43b3b", "warn": "#a16d21", "title": "#333333", "dim": "#999999"}.items():
+            self.log.tag_configure(tag, foreground=color)
+        self._log("选择一个 PDF 或图片文件夹，开始制作你的做题本。", "dim")
 
     def _build_path_frame(self, parent):
-        frame = ttk.LabelFrame(parent, text="📁 输入 / 输出", padding=(10, 6))
-        for i in range(4):
-            frame.columnconfigure(1, weight=1)
-
-        row = 0
-
-        # ---- 输入PDF行（勾选“从PDF提取页面”时使用）----
-        var_pdf = self._text_var("路径设置", "输入pdf文件")
-        lbl_pdf = ttk.Label(frame, text="输入PDF文件\n（每页=一张卡片）")
-        lbl_pdf.grid(row=row, column=0, sticky="w", pady=3)
-        entry_pdf = ttk.Entry(frame, textvariable=var_pdf)
-        entry_pdf.grid(row=row, column=1, sticky="ew", padx=(8, 4), pady=3)
-        browse_pdf = ttk.Button(
-            frame, text="选择PDF…", width=9,
-            command=lambda v=var_pdf: self._pick_pdf(v),
-        )
-        browse_pdf.grid(row=row, column=2, pady=3)
-        self.lock_widgets.extend([entry_pdf, browse_pdf])
-        self._pdf_row_widgets = [lbl_pdf, entry_pdf, browse_pdf]
-        row += 1
-
-        # ---- 旧版：直接提供JPG的文件夹（关闭“PDF转图片”时使用）----
-        var_legacy = self._text_var("路径设置", "输入文件夹")
-        lbl_legacy = ttk.Label(frame, text="输入文件夹\n（现成JPG，仅关PDF转图时用）")
-        lbl_legacy.grid(row=row, column=0, sticky="w", pady=3)
-        entry_legacy = ttk.Entry(frame, textvariable=var_legacy)
-        entry_legacy.grid(row=row, column=1, sticky="ew", padx=(8, 4), pady=3)
-        browse_legacy = ttk.Button(
-            frame, text="浏览…", width=6,
-            command=lambda v=var_legacy: self._pick_dir(v),
-        )
-        browse_legacy.grid(row=row, column=2, pady=3)
-        self.lock_widgets.extend([entry_legacy, browse_legacy])
-        self._legacy_row_widgets = [lbl_legacy, entry_legacy, browse_legacy]
-        row += 1
-
-        # ---- 其余路径字段 ----
-        for section, key, label, kind in PATH_FIELDS:
-            ttk.Label(frame, text=label).grid(row=row, column=0, sticky="w", pady=3)
-            var = self._text_var(section, key)
-            entry = ttk.Entry(frame, textvariable=var)
-            entry.grid(row=row, column=1, sticky="ew", padx=(8, 4), pady=3)
-            self.lock_widgets.append(entry)
-            if kind == "dir":
-                browse = ttk.Button(
-                    frame, text="浏览…", width=6,
-                    command=lambda v=var: self._pick_dir(v),
-                )
-                browse.grid(row=row, column=2, pady=3)
-                self.lock_widgets.append(browse)
-            row += 1
+        frame = ttk.Frame(parent)
+        frame.columnconfigure(0, weight=1)
+        ttk.Label(frame, text="01  题目来源", style="Section.TLabel").grid(row=0, column=0, sticky="w", pady=(0, 12))
+        self.var_input_type = self._text_var("路径设置", "输入类型")
+        self.var_input_type.set(normalize_input_type(self.var_input_type.get()) or INPUT_TYPE_PDF)
+        modes = ttk.Frame(frame)
+        modes.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(0, 10))
+        for col, (value, label) in enumerate(((INPUT_TYPE_PDF, "PDF · 每页一题"), (INPUT_TYPE_FOLDER, "图片文件夹 · 每图一题"))):
+            modes.columnconfigure(col, weight=1)
+            button = ttk.Radiobutton(modes, text=label, variable=self.var_input_type, value=value, style="Source.TRadiobutton", command=self._sync_input_rows)
+            button.grid(row=0, column=col, sticky="ew", padx=(0 if col == 0 else 6, 0))
+            self.lock_widgets.append(button)
+        self._input_rows = {}
+        for value, key in ((INPUT_TYPE_PDF, "输入pdf文件"), (INPUT_TYPE_FOLDER, "输入文件夹")):
+            row = ttk.Frame(frame)
+            row.columnconfigure(0, weight=1)
+            row.grid(row=2, column=0, columnspan=2, sticky="ew")
+            var = self._text_var("路径设置", key)
+            entry = ttk.Entry(row, textvariable=var)
+            entry.grid(row=0, column=0, sticky="ew", padx=(0, 6))
+            pick = self._pick_pdf if value == INPUT_TYPE_PDF else self._pick_dir
+            button = ttk.Button(row, text="选择 PDF" if value == INPUT_TYPE_PDF else "选择文件夹", command=lambda v=var, p=pick: p(v))
+            button.grid(row=0, column=1)
+            self.lock_widgets.extend([entry, button])
+            self._input_rows[value] = row
+        self.var_source_hint = tk.StringVar()
+        ttk.Label(frame, textvariable=self.var_source_hint, style="Hint.TLabel", wraplength=460).grid(row=3, column=0, columnspan=2, sticky="w", pady=(8, 0))
+        # GUI always generates a complete book; legacy step switches remain usable in CLI.
+        self._step_vars = {}
+        for key in DEFAULTS["步骤控制"]:
+            var = tk.BooleanVar(value=True)
+            self.vars[("步骤控制", key)] = var
+            self._step_vars[key] = var
         return frame
 
     def _sync_input_rows(self):
-        """按“从PDF提取页面”开关显示输入PDF行 / 旧版JPG文件夹行。"""
-        if not hasattr(self, "_step_vars"):
-            return
-        pdf_on = self._step_vars["执行_pdf转图片"].get()
-        for w in self._pdf_row_widgets:
-            if pdf_on:
-                w.grid()
+        source = self.var_input_type.get()
+        for value, row in self._input_rows.items():
+            if value == source:
+                row.grid()
             else:
-                w.grid_remove()
-        for w in self._legacy_row_widgets:
-            if pdf_on:
-                w.grid_remove()
-            else:
-                w.grid()
+                row.grid_remove()
+        self._step_vars["执行_pdf转图片"].set(source == INPUT_TYPE_PDF)
+        self.var_source_hint.set("按 PDF 页码顺序导入，每一页作为一张独立题目卡片。" if source == INPUT_TYPE_PDF else "支持 JPG、PNG、WebP、BMP、TIFF；按文件名自然排序（1、2、10），不包含子文件夹。")
 
     def _pick_pdf(self, var):
-        initial = var.get() or str(APP_DIR)
-        chosen = filedialog.askopenfilename(
-            initialdir=str(Path(initial).parent) if var.get() else str(APP_DIR),
-            title="选择输入PDF（每页一张卡片）",
-            filetypes=[("PDF 文件", "*.pdf"), ("所有文件", "*.*")],
-        )
+        raw = var.get().strip()
+        initial = self._resolve_path(raw).parent if raw else self.base_dir
+        chosen = filedialog.askopenfilename(parent=self.root, initialdir=str(initial), title="选择题目 PDF（每页一题）", filetypes=[("PDF 文件", "*.pdf"), ("所有文件", "*.*")])
         if chosen:
             var.set(chosen)
 
-    def _build_steps_frame(self, parent):
-        frame = ttk.LabelFrame(parent, text="⚙️  执行步骤（勾选 = 在 config.ini 中启用）", padding=(10, 6))
-        self._step_vars = {}
-        for i, (key, label) in enumerate(STEPS):
-            section = "步骤控制"
-            var = tk.BooleanVar(value=self._bool_default(section, key))
-            self.vars[(section, key)] = var
-            self._step_vars[key] = var
-            cb = ttk.Checkbutton(
-                frame, text=f"{i + 1}. {label}", variable=var,
-                command=self._sync_input_rows,
-            )
-            cb.grid(row=i, column=0, sticky="w", pady=2)
-            self.lock_widgets.append(cb)
-        return frame
-
-    def _build_output_frame(self, parent):
-        """输出选项：只保留最终PDF（结束后删除 pages/ 与 layout/）"""
-        frame = ttk.LabelFrame(parent, text="🗂  输出选项", padding=(10, 4))
-        section, key = "输出设置", "只生成pdf文件"
-        var = tk.BooleanVar(value=self._bool_default(section, key))
-        self.vars[(section, key)] = var
-        cb = ttk.Checkbutton(
-            frame,
-            text="只生成 PDF 文件（结束后删除 pages / layout 中间文件夹）",
-            variable=var,
-        )
-        cb.grid(row=0, column=0, sticky="w", pady=1)
-        self.lock_widgets.append(cb)
-        ttk.Label(
-            frame,
-            text="勾选后输出目录只保留最终PDF；需同时勾选第 3 步「合并为单个 PDF」",
-            style="Hint.TLabel",
-        ).grid(row=1, column=0, sticky="w")
-        return frame
-
     def _build_paper_frame(self, parent):
-        frame = ttk.LabelFrame(parent, text="📄  纸张大小（预设）", padding=(10, 6))
-        frame.columnconfigure(1, weight=1)
-
-        # 纸张宽/高（写入 config.ini：页面宽度_mm / 页面高度_mm）
+        frame = ttk.Frame(parent)
+        ttk.Label(frame, text="02  排版设置", style="Section.TLabel").grid(row=0, column=0, columnspan=4, sticky="w", pady=(0, 12))
         var_w = self._text_var("排版参数", "页面宽度_mm")
         var_h = self._text_var("排版参数", "页面高度_mm")
-        # 不展示但保留的高级参数（写入config，默认即可，可在 config.ini 微调）
-        self._hidden_text("排版参数", "dpi")
-        self._hidden_text("排版参数", "间距_mm")
-        self._hidden_text("PDF参数", "pdf_质量")
-
-        def cur_dims():
-            try:
-                return int(var_w.get() or 0), int(var_h.get() or 0)
-            except ValueError:
-                return 0, 0
-
-        cw, ch = cur_dims()
-        matched = next(
-            (n for n, w, h in PAPER_PRESETS if int(w) == cw and int(h) == ch),
-            None,
-        )
-        options = list(PAPER_NAMES)
-        if matched is None:
-            options.append("自定义…")
-
-        self.var_paper = tk.StringVar(value=matched or "自定义…")
-        self.var_paper_info = tk.StringVar()
-        combo = ttk.Combobox(
-            frame, textvariable=self.var_paper, values=options,
-            state="readonly", width=12,
-        )
-        combo.grid(row=0, column=1, sticky="w", padx=(8, 0), pady=3)
-        self.lock_widgets.append(combo)
-        ttk.Label(frame, text="输出纸张：").grid(row=0, column=0, sticky="w", pady=3)
-        info = ttk.Label(frame, textvariable=self.var_paper_info, style="Hint.TLabel")
-        info.grid(row=1, column=0, columnspan=2, sticky="w", pady=(0, 2))
-
-        def refresh_info():
-            sel = self.var_paper.get()
-            for n, w, h in PAPER_PRESETS:
-                if n == sel:
-                    self.var_paper_info.set(f"{n}：宽 {w} × 高 {h} mm（成页按此尺寸生成）")
-                    return
-            try:
-                cw, ch = int(var_w.get()), int(var_h.get())
-                self.var_paper_info.set(
-                    f"当前自定义 {cw}×{ch}mm：请选标准纸张，或直接改 config.ini 微调"
-                )
-            except ValueError:
-                self.var_paper_info.set("请选择标准纸张")
-
+        for section, key in (("排版参数", "dpi"), ("排版参数", "间距_mm"), ("PDF参数", "pdf_质量")):
+            self._hidden_text(section, key)
+        matched = next((name for name, w, h in PAPER_PRESETS if (w, h) == (var_w.get(), var_h.get())), "自定义")
+        self.var_paper = tk.StringVar(value=matched)
+        ttk.Label(frame, text="纸张", style="Hint.TLabel").grid(row=1, column=0, sticky="w", padx=(0, 8))
+        combo = ttk.Combobox(frame, textvariable=self.var_paper, values=PAPER_NAMES + (["自定义"] if matched == "自定义" else []), state="readonly", width=9)
+        combo.grid(row=1, column=1, sticky="w")
+        ttk.Label(frame, text="每页题目", style="Hint.TLabel").grid(row=1, column=2, sticky="w", padx=(20, 8))
+        count = ttk.Spinbox(frame, from_=1, to=12, textvariable=self._text_var("排版参数", "每页题目数"), width=4)
+        count.grid(row=1, column=3, sticky="w")
+        self.lock_widgets.extend([combo, count])
         def on_paper_change(_event=None):
-            sel = self.var_paper.get()
-            for n, w, h in PAPER_PRESETS:
-                if n == sel:
+            for name, w, h in PAPER_PRESETS:
+                if name == self.var_paper.get():
                     var_w.set(w)
                     var_h.set(h)
                     break
-            refresh_info()
-
+            self._refresh_preview()
         combo.bind("<<ComboboxSelected>>", on_paper_change)
-        self._paper_apply = on_paper_change
-        refresh_info()
         return frame
 
-    def _build_layout_frame(self, parent):
-        frame = ttk.LabelFrame(parent, text="🧮  每张纸排布", padding=(10, 6))
+    def _build_output_frame(self, parent):
+        frame = ttk.Frame(parent)
         frame.columnconfigure(1, weight=1)
-        row = 0
-        for section, key, label in INT_FIELDS:
-            ttk.Label(frame, text=label).grid(row=row, column=0, sticky="w", pady=3)
+        ttk.Label(frame, text="03  保存做题本", style="Section.TLabel").grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 10))
+        for row, (section, key, label, kind) in enumerate(PATH_FIELDS, 1):
+            ttk.Label(frame, text=label, style="Hint.TLabel").grid(row=row, column=0, sticky="w", padx=(0, 10))
             var = self._text_var(section, key)
-            entry = ttk.Entry(frame, textvariable=var, width=6)
-            entry.grid(row=row, column=1, sticky="w", padx=(8, 0), pady=3)
+            entry = ttk.Entry(frame, textvariable=var)
+            entry.grid(row=row, column=1, columnspan=1 if kind == "dir" else 2, sticky="ew", pady=4)
             self.lock_widgets.append(entry)
-            row += 1
-        ttk.Label(
-            frame,
-            text="纸张按 N 等分（竖版单列 N 行），每道题缩放适配并在格内顶部对齐，\n下方留白用于书写；最后一张不足 N 道时按剩余数量自动排布。",
-            style="Hint.TLabel",
-        ).grid(row=row, column=0, columnspan=2, sticky="w", pady=(4, 0))
+            if kind == "dir":
+                button = ttk.Button(frame, text="更改", command=lambda v=var: self._pick_dir(v))
+                button.grid(row=row, column=2, padx=(6, 0))
+                self.lock_widgets.append(button)
+        var = tk.BooleanVar(value=self._bool_default("输出设置", "只生成pdf文件"))
+        self.vars[("输出设置", "只生成pdf文件")] = var
+        check = ttk.Checkbutton(frame, text="仅保留成品 PDF，完成后清理中间文件", variable=var)
+        check.grid(row=3, column=0, columnspan=3, sticky="w", pady=(6, 0))
+        self.lock_widgets.append(check)
         return frame
+
+    def _refresh_preview(self, *_):
+        if not hasattr(self, "preview"):
+            return
+        c = self.preview
+        c.delete("all")
+        try:
+            n = int(self.vars[("排版参数", "每页题目数")].get())
+            w = int(self.vars[("排版参数", "页面宽度_mm")].get())
+            h = int(self.vars[("排版参数", "页面高度_mm")].get())
+            if not 1 <= n <= 12 or min(w, h) <= 0:
+                raise ValueError
+        except ValueError:
+            self.var_summary.set("请输入 1–12 道题")
+            return
+        scale = min(170 / w, 249 / h)
+        pw, ph = w * scale, h * scale
+        x, y = (220 - pw) / 2, (285 - ph) / 2
+        c.create_rectangle(x+3, y+4, x+pw+3, y+ph+4, fill="#e6e6e8", outline="")
+        c.create_rectangle(x, y, x+pw, y+ph, fill="#ffffff", outline="#dedede")
+        band = (ph - 16) / n
+        for i in range(n):
+            top = y + 8 + i * band
+            c.create_rectangle(x+9, top, x+pw-9, top+max(3, min(19, band*0.3)), fill="#e4eee9", outline="")
+            if band > 32:
+                c.create_text(x+15, top+9, text=f"{i+1:02d}  题目卡片", anchor="w", font=(self.font, 8), fill="#517466")
+            if i < n-1:
+                c.create_line(x+9, top+band-4, x+pw-9, top+band-4, fill="#e9e9e9", dash=(3, 3))
+        self.var_summary.set(f"{self.var_paper.get()} · {w} × {h} mm · 每页 {n} 题\n末页按剩余题目自动分配空间")
+
+    def _resolve_path(self, raw):
+        path = Path(raw).expanduser()
+        return path if path.is_absolute() else self.base_dir / path
 
     # ---------------- 变量读写辅助 ----------------
 
@@ -524,7 +498,7 @@ class PdfMakerGUI:
             return False
 
     def _pick_dir(self, var):
-        chosen = filedialog.askdirectory(initialdir=var.get() or str(APP_DIR))
+        chosen = filedialog.askdirectory(parent=self.root, initialdir=str(self._resolve_path(var.get().strip())) if var.get().strip() else str(self.base_dir))
         if chosen:
             var.set(chosen)
 
@@ -537,6 +511,10 @@ class PdfMakerGUI:
                 values[(section, key)] = "true" if var.get() else "false"
             else:
                 values[(section, key)] = str(var.get()).strip()
+        for key in ("输入pdf文件", "输入文件夹", "输出文件夹"):
+            raw = values[("路径设置", key)]
+            if raw:
+                values[("路径设置", key)] = str(self._resolve_path(raw))
         return values
 
     def save_config(self, show_msg=True):
@@ -577,28 +555,47 @@ class PdfMakerGUI:
             messagebox.showerror("参数错误", "「间距」过大（不得大于页面尺寸一半）。")
             return False
 
-        # 勾选了“从PDF提取页面”就必须给出一个存在的PDF文件
-        if self._step_vars["执行_pdf转图片"].get():
-            pdf = self.vars[("路径设置", "输入pdf文件")].get().strip()
-            if not pdf:
-                messagebox.showerror(
-                    "缺少输入",
-                    "已勾选“从 PDF 提取页面为图片”，但还没选择 PDF 文件。\n"
-                    "请把卡片PDF放到 input/ 目录后，点“选择PDF…”选择它；\n"
-                    "或者取消该勾选（旧方式：直接使用输入文件夹里的JPG）。",
-                )
+        dpi = get_int_var("排版参数", "dpi", "DPI")
+        quality = get_int_var("PDF参数", "pdf_质量", "PDF 质量")
+        if dpi is None or quality is None:
+            return False
+        if not 36 <= dpi <= 600 or not 1 <= quality <= 100 or h <= (n + 1) * gap:
+            messagebox.showerror("参数错误", "DPI 应为 36–600，质量应为 1–100，间距需为每道题留出有效空间。")
+            return False
+        source = self.var_input_type.get()
+        key = "输入pdf文件" if source == INPUT_TYPE_PDF else "输入文件夹"
+        raw = self.vars[("路径设置", key)].get().strip()
+        path = self._resolve_path(raw)
+        if not raw or (not path.is_file() if source == INPUT_TYPE_PDF else not path.is_dir()):
+            messagebox.showerror("缺少输入", "请选择有效的 PDF 文件。" if source == INPUT_TYPE_PDF else "请选择有效的图片文件夹。")
+            return False
+        if source == INPUT_TYPE_PDF and path.suffix.lower() != ".pdf":
+            messagebox.showerror("输入格式错误", "请选择 PDF 文件，或切换到图片文件夹。")
+            return False
+        if source == INPUT_TYPE_FOLDER:
+            try:
+                found = any(p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS for p in path.iterdir())
+            except OSError as exc:
+                messagebox.showerror("无法读取文件夹", str(exc))
                 return False
-            if not Path(pdf).exists():
-                messagebox.showerror("找不到文件", f"输入PDF不存在：\n{pdf}")
+            if not found:
+                messagebox.showerror("没有题目图片", "文件夹中没有支持的图片。支持 JPG、PNG、WebP、BMP、TIFF，不搜索子文件夹。")
                 return False
-
-        # 「只生成 PDF 文件」依赖合并步骤产出最终PDF，否则没有可保留的结果
-        if self.vars[("输出设置", "只生成pdf文件")].get() and not self._step_vars["执行_合并pdf"].get():
-            messagebox.showerror(
-                "选项冲突",
-                "已勾选「只生成 PDF 文件」，但没有勾选第 3 步「合并为单个 PDF」。\n"
-                "请勾上该步骤（否则不会生成PDF，也没有中间文件可清理）。",
-            )
+        out = self.vars[("路径设置", "输出文件夹")].get().strip()
+        name_var = self.vars[("路径设置", "pdf文件名")]
+        name = name_var.get().strip()
+        if not out or not name or name in {".", ".."} or any(c in name for c in '/\\:*?"<>|'):
+            messagebox.showerror("输出设置错误", "请选择输出文件夹，并填写不含路径或特殊字符的 PDF 文件名。")
+            return False
+        if not name.lower().endswith(".pdf"):
+            name += ".pdf"
+        name_var.set(name)
+        output = self._resolve_path(out)
+        if output.exists() and not output.is_dir():
+            messagebox.showerror("输出设置错误", "输出位置必须是文件夹。")
+            return False
+        if source == INPUT_TYPE_PDF and (output / name).resolve() == path.resolve():
+            messagebox.showerror("输出设置错误", "成品路径与输入 PDF 相同，请修改文件名或输出文件夹。")
             return False
         return True
 
@@ -613,25 +610,26 @@ class PdfMakerGUI:
         if not self._validate():
             return
 
-        self.save_config(show_msg=False)  # 运行前自动保存
+        try:
+            self.save_config(show_msg=False)
+        except OSError as exc:
+            messagebox.showerror("无法保存设置", str(exc))
+            return
 
         # 当前输入输出目录（相对路径以 base_dir 为准），便于结束后提示
         out_var = self.vars[("路径设置", "输出文件夹")].get().strip()
-        out_path = Path(out_var)
-        if not out_path.is_absolute():
-            out_path = Path(self.base_dir) / out_path
-        self._last_out_dir = out_path
+        self._last_out_dir = self._resolve_path(out_var)
 
         self._set_running(True)
         self.log_clear()
-        self._log("▶ 开始生成（参数已保存到 config.ini）……", "title")
+        self._log("开始制作做题本…", "title")
         self._out_q = queue.Queue()
         threading.Thread(target=self._worker, daemon=True).start()
         self.root.after(80, self._poll_queue)
 
     def _engine_command(self):
         """运行引擎的命令：
-        冻结态 → 当前程序本体走 --cli 分支；开发态 → .venv python 运行 pdf_maker.py"""
+        冻结态 → 当前程序本体走 --cli 分支；开发态 → .venv python 运行 core/pdf_engine.py"""
         cfg = ["--config", str(self.config_path)]
         if is_frozen():
             return [sys.executable, "--cli"] + cfg
@@ -652,6 +650,7 @@ class PdfMakerGUI:
                 start_new_session=True,  # 独立进程组，便于连同子任务一起停止
             )
         except Exception as e:  # pragma: no cover
+            self._out_q.put(f"❌ 无法启动生成任务: {e}")
             self._out_q.put(None)
             return
         self._proc = proc
@@ -660,6 +659,7 @@ class PdfMakerGUI:
                 self._out_q.put(line)
         finally:
             proc.stdout.close()
+            proc.wait()
             self._out_q.put(None)
 
     def _poll_queue(self):
@@ -692,7 +692,7 @@ class PdfMakerGUI:
         self._set_running(False)
         if code == 0:
             self._log("🎉 运行完成！", "ok")
-            self.var_status.set("✅ 全部步骤完成，输出文件已生成（可点「打开输出目录」查看）")
+            self.var_status.set("已完成，做题本已保存到输出文件夹")
         else:
             self._log(f"❌ 运行结束，退出码 = {code}（详见上方日志）", "err")
             self.var_status.set("❌ 运行失败或已停止，请查看日志")
@@ -729,8 +729,9 @@ class PdfMakerGUI:
         self.btn_start.config(state="disabled" if flag else "normal")
         self.btn_stop.config(state="normal" if flag else "disabled")
         for w in self.lock_widgets:
-            w.config(state="disabled" if flag else "normal")
+            w.config(state="disabled" if flag else ("readonly" if isinstance(w, ttk.Combobox) else "normal"))
         if flag:
+            self.var_status.set("正在准备题目卡片…")
             self.progress.start(12)
         else:
             self.progress.stop()
@@ -752,7 +753,6 @@ class PdfMakerGUI:
         if set(line.strip()) == {"="}:
             return
 
-        tag = None
         if "🎉" in line or "✅" in line:
             tag = "ok"
         elif "❌" in line or "失败" in line or "错误" in line:
@@ -782,9 +782,7 @@ class PdfMakerGUI:
         folder = getattr(self, "_last_out_dir", None)
         if folder is None:
             raw = self.vars[("路径设置", "输出文件夹")].get().strip()
-            folder = Path(raw)
-            if not folder.is_absolute():
-                folder = Path(self.base_dir) / folder
+            folder = self._resolve_path(raw)
         if not folder.exists():
             messagebox.showinfo("提示", f"输出目录尚不存在：{folder}")
             return

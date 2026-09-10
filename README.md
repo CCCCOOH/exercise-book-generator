@@ -4,14 +4,18 @@
   <img src="./assets/icon.png" alt="项目图标" width="200" />
 </div>
 
-> 简介：由于MarginNote导出的卡片不符合A4格式，无法直接打印。本项目提供了对应的功能，通过python工作流实现将MarginNote导出的卡片pdf一键自动处理为可以用于打印的A4错题本，并支持调整页面可容纳的题目数量。
+> 将 PDF 或图片文件夹中的题目卡片，一键排版为适合打印的做题本。支持 MarginNote 导出的卡片 PDF、自行整理的题目截图，以及 A4、B5、A5 等纸张。
 > 生成的pdf格式可以用于打印为纸质版的错题本，从而提高刷错题的效率🚀。
 
 ![](./assets/hero.png)
 
 
 可以用于：
-- 制作题本。
+- PDF 输入：每一页是一张独立题目卡片，按页码顺序排版。
+- 图片文件夹输入：每个图片文件是一张独立题目卡片，支持 JPG / JPEG / PNG / WebP / BMP / TIFF。
+- 文件名自然排序：`1.png、2.png、10.png`，仅读取所选文件夹的直接子文件；多帧图片只使用第一帧。
+- 自动校正照片 EXIF 方向，透明图片使用白色底色。
+- 类 GPT 的简洁浅色界面：侧栏、来源切换、实时排版示意、生成状态和日志。
 - 导出错题集为错题本。
 - 自定义每一面题目的数量。
 - 可选的的题本尺寸预设（A4、B5等）
@@ -37,7 +41,40 @@
   </tr>
 </table>
 
-选择MarginNote中导出的卡片集pdf作为`输入PDF文件`，选择纸张大小和每张纸的题目数量（越多越省纸，但空间更小）。
+使用新版界面：
+
+1. macOS 双击项目内的 `start_gui.command`，或使用带 Tk 的 Python 运行 `pdf_maker_gui.py`。
+2. 在「题目来源」选择「PDF · 每页一题」或「图片文件夹 · 每图一题」，选择对应文件或目录。
+3. 选择纸张和每页题目数（1–12）。右侧示意会同步更新；题目在各自区域顶部对齐，下方留白，末页按剩余题数分配空间。
+4. 设置输出文件夹和成品名称，点击「生成做题本」。界面会自动执行完整流程，无需手动选择步骤。
+5. 完成后通过侧栏「打开输出文件夹」查看成品。
+
+生成的成品尺寸与所选纸张一致。来源文件与成品不能同名同路径；图片源目录位于输出 `layout/` 内时会提示换一个输出目录，避免覆盖原图。加密 PDF 需要先解锁。右侧显示的是排版示意，不是题目内容预览。
+
+命令行仍支持通过 `config.ini` 控制各步骤。在 `[路径设置]` 中设置 `输入类型 = pdf` 或 `输入类型 = folder`，并填写 `输入pdf文件` 或 `输入文件夹`。旧配置未填写输入类型时，会根据原「执行_pdf转图片」开关推断。GUI 会记住选择，并在下次生成前保存设置。
+
+```sh
+.venv/bin/python pdf_maker_gui.py --cli --config config.ini
+```
+
+修改源码后通过启动脚本运行即可体验新版。需要独立的 macOS 应用时，在 Finder 中双击项目根目录的 **`build_mac.command`**：
+
+- 自动查找带 Tk 的 Python 3.13+，准备独立打包环境和依赖。
+- 使用项目图标打包最新源码，校验签名与 Tcl/Tk 运行库。
+- 使用打包后的应用分别验证 PDF、图片文件夹两种输入，检查成品页数、纸张尺寸及中间文件清理。
+- 全部成功后更新 `dist/ZuotiBenPdfTool.app`，自动打开 `dist`。打包或自检失败时保留旧版应用；`dist` 内其它文件也会保留。
+
+首次运行可能需要联网安装依赖。产物对应当前 Mac 的处理器架构；这不是跨架构打包或 Apple 公证流程。打包日志在 `build/packaging.log`。
+
+也可在终端运行：
+
+```sh
+./build_mac.command
+./build_mac.command --no-open   # 不自动打开 Finder
+./build_mac.command --help      # 查看更多选项
+```
+
+之后每次改完源码，重新双击该脚本即可更新 `dist` 中的应用。
 
 如果只想要最终成品，可勾选界面上的**「只生成 PDF 文件」**（对应 `config.ini` 里的 `[输出设置] 只生成pdf文件 = true`）：
 合并PDF成功后会自动删除输出目录下的 `pages/`、`layout/` 中间文件夹，只留下最终 PDF。
@@ -67,3 +104,33 @@
 git clone https://github.com/CCCCOOH/exercise-book-generator.git
 # 请自行编译和安装依赖相关依赖...
 ```
+
+开发验证（生成引擎需要 PyMuPDF / Pillow，GUI 测试需要带 Tk 的 Python）：
+
+```sh
+.venv/bin/python -m unittest discover -s tests -p 'test_inputs.py' -v
+.venv/bin/python tests/test_only_pdf.py
+/Library/Frameworks/Python.framework/Versions/3.13/bin/python3 -m unittest discover -s tests -p 'test_gui.py' -v
+```
+
+
+生成 macOS 安装包（PKG）：
+
+在 Finder 中双击 **`build_pkg.command`**，脚本会先重新打包并自检最新版应用，再生成 `dist/ZuotiBenPdfTool.pkg`，完成后打开 `dist`。双击该 PKG，按照 macOS 安装器提示即可安装到 `/Applications/ZuotiBenPdfTool.app`。生成脚本不会自动安装，也不需要管理员权限；安装时由系统请求权限。
+
+```sh
+./build_pkg.command
+./build_pkg.command --skip-app-build  # 直接使用 dist 中已经打包的应用
+./build_pkg.command --no-open         # 不自动打开 Finder
+./build_pkg.command --version 1.0.0   # 默认读取 pyproject.toml 的 version
+./build_pkg.command --sign "Developer ID Installer: Your Name (TEAMID)"
+```
+
+PKG 会校验安装内容和安装器读取能力，成功后才替换旧安装包；日志位于 `build/pkg-packaging.log`。安装目标固定为“应用程序”，不会把应用安装到项目的 dist 副本位置。安装包架构与应用一致。
+
+默认生成未签名 PKG，macOS 的安全策略可能要求用户确认或阻止安装。对外分发时可使用已有的 Developer ID Installer 证书签名；Apple 公证需另行完成，脚本不会自动申请证书或公证。
+
+
+版本约定：以后“最新版”专指当前现代浅色 UI（`pdf_maker_gui.py`）。APP 与 PKG 均以此为唯一应用入口，不打包其它 UI 版本。
+
+源码结构：根目录只保留 `pdf_maker_gui.py` 一个应用入口（现代浅色界面，也支持 `--cli`）。PDF 排版引擎放在 `core/pdf_engine.py`；`tests/` 保留功能验证用例，不是其它界面版本。原 `pdf_maker_app.py` 打包入口已合并到界面入口，APP 和 PKG 打包脚本均已同步。

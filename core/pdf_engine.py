@@ -2,10 +2,10 @@
 # -*- coding: utf-8 -*-
 
 """
-pdf_maker.py —— 做题本 PDF 生成引擎（纯 Python，无系统工具依赖）
+core/pdf_engine.py —— 做题本 PDF 生成引擎（纯 Python，无系统工具依赖）
 ===============================================================
 
-输入：卡片PDF（每页一道题）或 现成JPG卡片文件夹
+输入：卡片PDF（每页一道题）或 图片卡片文件夹
 流程：
   步骤1(可选): 输入PDF的每一页 → 一张JPG（一张卡片=一道题）  [PyMuPDF 渲染]
   步骤2: 排版 —— 每张纸按“每页题目数”等分成 N 个横条，
@@ -15,13 +15,16 @@ pdf_maker.py —— 做题本 PDF 生成引擎（纯 Python，无系统工具依
 
 需要：pip install pymupdf pillow
 用法：
-  python pdf_maker.py                 # 使用脚本同目录的 config.ini
-  python pdf_maker.py --config 路径    # 使用指定配置文件
+  python core/pdf_engine.py                 # 使用脚本同目录的 config.ini
+  python core/pdf_engine.py --config 路径    # 使用指定配置文件
 """
 
 import sys
 import shutil
 import configparser
+import re
+import tempfile
+import os
 from pathlib import Path
 
 # ============================================================
@@ -56,7 +59,7 @@ def get_config(config_path):
     if not config_file.exists():
         print(f"❌ 错误: 配置文件不存在: {config_file}")
         return None
-    config = configparser.ConfigParser()
+    config = configparser.ConfigParser(interpolation=None)
     config.read(config_file, encoding='utf-8')
     return config
 
@@ -78,13 +81,47 @@ def get_str(config, section, key, default=""):
     except Exception:
         return default
 
-def collect_jpg_files(folder):
-    """按文件名排序取出文件夹下所有jpg"""
-    files = []
-    for ext in ['.jpg', '.jpeg', '.JPG', '.JPEG']:
-        files.extend(Path(folder).glob(f'*{ext}'))
-    files.sort(key=lambda p: p.name)
-    return files
+IMAGE_EXTENSIONS = {
+    '.jpg', '.jpeg', '.png', '.webp', '.bmp', '.tif', '.tiff',
+}
+
+def _natural_sort_key(path):
+    """让 1.jpg、2.jpg、10.jpg 按数字顺序排列"""
+    parts = re.split(r'(\d+)', path.name.casefold())
+    return tuple(
+        (0, int(part)) if part.isdigit() else (1, part)
+        for part in parts
+    )
+
+def collect_image_files(folder):
+    """按自然文件名顺序取出文件夹下所有支持的图片。"""
+    folder = Path(folder)
+    if not folder.is_dir():
+        return []
+    files = [
+        path for path in folder.iterdir()
+        if path.is_file() and path.suffix.casefold() in IMAGE_EXTENSIONS
+    ]
+    return sorted(files, key=_natural_sort_key)
+
+def normalize_input_type(value):
+    """把配置/界面里的输入类型统一为 pdf 或 folder。"""
+    value = str(value or '').strip().casefold()
+    if value in {'pdf', 'pdf文件', 'pdf文件（每页=一张卡片）', 'file'}:
+        return 'pdf'
+    if value in {'folder', 'dir', 'directory', 'images', 'image_folder',
+                 '文件夹', '图片文件夹'}:
+        return 'folder'
+    return ''
+
+def resolve_input_type(config):
+    """读取输入类型；旧配置没有该项时，按原PDF转图片开关推断。"""
+    input_type = normalize_input_type(
+        get_str(config, '路径设置', '输入类型', '')
+    )
+    if input_type:
+        return input_type
+    return 'pdf' if get_bool(config, '步骤控制', '执行_pdf转图片', False) else 'folder'
 
 def mm_to_px(mm, dpi):
     return int(round(mm * dpi / 25.4))
@@ -121,8 +158,6 @@ def step_pdf_to_pages(config, pdf_file, output_dir):
     pages_dir.mkdir(parents=True, exist_ok=True)
     for old in pages_dir.glob("*.jpg"):
         old.unlink()
-    for old in Path(output_dir).glob("*.jpg"):
-        old.unlink()
 
     print(f"PDF: {pdf_path}")
     print(f"渲染 DPI: {dpi}")
@@ -135,8 +170,9 @@ def step_pdf_to_pages(config, pdf_file, output_dir):
         return False
 
     n_pages = len(doc)
-    if n_pages == 0:
-        print("❌ PDF没有任何页面")
+    if n_pages == 0 or doc.needs_pass:
+        print("❌ PDF没有页面或受密码保护，请先解锁 PDF")
+        doc.close()
         return False
 
     try:
@@ -175,9 +211,13 @@ def step_layout_pages(config, src_folder, output_dir):
     margin_mm = get_int(config, '排版参数', '间距_mm', 3)
     page_quality = get_int(config, 'PDF参数', 'pdf_质量', 85)
 
-    cards = collect_jpg_files(src_folder)
+    layout_dir = Path(output_dir) / "layout"
+    if _is_inside(src_folder, layout_dir):
+        print("❌ 图片来源位于排版输出目录 layout 内，请选择其他输出文件夹以保护原图")
+        return False
+    cards = collect_image_files(src_folder)
     if not cards:
-        print(f"❌ 没有找到卡片JPG: {src_folder}")
+        print(f"❌ 没有找到卡片图片: {src_folder}")
         return False
     if n_per_page < 1:
         print(f"❌ 每页题目数必须 ≥ 1，当前: {n_per_page}")
@@ -191,7 +231,6 @@ def step_layout_pages(config, src_folder, output_dir):
         print("❌ 页面尺寸或留白设置不合理（内容区为空）")
         return False
 
-    layout_dir = Path(output_dir) / "layout"
     layout_dir.mkdir(parents=True, exist_ok=True)
     for old in layout_dir.glob("*.jpg"):
         old.unlink()
@@ -212,7 +251,13 @@ def step_layout_pages(config, src_folder, output_dir):
         canvas = Image.new('RGB', (W, H), 'white')
         for r, card_path in enumerate(group):
             try:
-                card = Image.open(card_path).convert('RGB')
+                from PIL import ImageOps
+                with Image.open(card_path) as original:
+                    # Each file is one card, including multi-frame TIFF/WebP.
+                    oriented = ImageOps.exif_transpose(original)
+                    rgba = oriented.convert('RGBA')
+                    card = Image.new('RGB', rgba.size, 'white')
+                    card.paste(rgba, mask=rgba.getchannel('A'))
             except Exception as e:
                 print(f"  ❌ 无法读取 {card_path.name}: {e}")
                 return False
@@ -259,7 +304,7 @@ def step_merge_to_pdf(config, input_folder, output_folder):
     pdf_name = get_str(config, '路径设置', 'pdf文件名', 'output.pdf')
     pdf_file = Path(output_folder) / pdf_name
 
-    jpg_files = collect_jpg_files(input_folder)
+    jpg_files = collect_image_files(input_folder)
     if not jpg_files:
         print("❌ 没有找到JPG文件")
         return False
@@ -270,16 +315,22 @@ def step_merge_to_pdf(config, input_folder, output_folder):
     print(f"纸张: {page_w_mm}×{page_h_mm}mm → PDF页 {pt_w:.1f}×{pt_h:.1f}pt")
     print(f"输出: {pdf_file}")
 
+    temporary = None
     try:
-        doc = import_pymupdf.open()
-        for f in jpg_files:
-            page = doc.new_page(width=pt_w, height=pt_h)
-            page.insert_image(page.rect, filename=str(f))
-        doc.save(str(pdf_file), garbage=3, deflate=True)
-        doc.close()
+        with tempfile.NamedTemporaryFile(suffix='.pdf', dir=output_folder, delete=False) as tmp:
+            temporary = Path(tmp.name)
+        with import_pymupdf.open() as doc:
+            for f in jpg_files:
+                page = doc.new_page(width=pt_w, height=pt_h)
+                page.insert_image(page.rect, filename=str(f))
+            doc.save(str(temporary), garbage=3, deflate=True)
+        os.replace(temporary, pdf_file)
     except Exception as e:
         print(f"❌ 生成PDF失败: {e}")
         return False
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
 
     size = pdf_file.stat().st_size
     print(f"✅ PDF生成成功! 大小: {human_size(size)}, 页数: {len(jpg_files)}")
@@ -321,7 +372,7 @@ def _protect_reason(target, protected_paths):
     for p in protected_paths:
         if p is None:
             continue
-        if _is_inside(p, target):
+        if _is_inside(p, target) or (Path(p).is_dir() and _is_inside(target, p)):
             return f"其中包含用户输入 {p}"
     return None
 
@@ -338,6 +389,7 @@ def step_cleanup_intermediate(output_folder, protected_paths=()):
     targets = [Path(output_folder) / "pages", Path(output_folder) / "layout"]
     freed = 0
     failed = 0
+    skipped = 0
 
     for target in targets:
         if not target.exists():
@@ -346,6 +398,7 @@ def step_cleanup_intermediate(output_folder, protected_paths=()):
         reason = _protect_reason(target, protected_paths)
         if reason:
             print(f"  ⚠️  跳过（{reason}）: {target}")
+            skipped += 1
             continue
         size = dir_size(target)
         try:
@@ -360,7 +413,8 @@ def step_cleanup_intermediate(output_folder, protected_paths=()):
     if failed:
         print(f"⚠️  有 {failed} 个中间文件夹未能删除，请手动清理")
         return False
-    print(f"✅ 中间文件已清理，共释放 {human_size(freed)}，输出目录仅保留最终PDF")
+    print(f"✅ 中间文件已清理，共释放 {human_size(freed)}" +
+          (f"；已保留 {skipped} 个涉及用户输入的目录" if skipped else ""))
     return True
 
 
@@ -378,7 +432,7 @@ def engine_main(config_path):
     print("=" * 60)
     print("📄 做题本生成工具")
     print("=" * 60)
-    print("输入: 卡片PDF(每页一题) 或 JPG卡片文件夹")
+    print("输入: 卡片PDF(每页一题) 或 图片卡片文件夹")
     print("输出: PDF做题本，纸张与每页N题见 config.ini")
     print("=" * 60)
 
@@ -388,24 +442,48 @@ def engine_main(config_path):
 
     input_folder = get_str(config, '路径设置', '输入文件夹', './images')
     output_folder = get_str(config, '路径设置', '输出文件夹', './output')
-    pdf_enabled = get_bool(config, '步骤控制', '执行_pdf转图片', False)
+    input_type = resolve_input_type(config)
     pdf_file = get_str(config, '路径设置', '输入pdf文件', '')
     only_pdf = get_bool(config, '输出设置', '只生成pdf文件', False)
 
+    pdf_name = get_str(config, '路径设置', 'pdf文件名', 'output.pdf').strip()
+    if not output_folder.strip() or not pdf_name or any(c in pdf_name for c in '/\\:*?"<>|') or pdf_name in {'.', '..'}:
+        print("❌ 输出文件夹与 PDF 文件名不能为空，文件名不能包含路径或特殊字符")
+        return False
+    if not pdf_name.lower().endswith('.pdf'):
+        pdf_name += '.pdf'
+    config.set('路径设置', 'pdf文件名', pdf_name)
+    if input_type == 'pdf' and pdf_file and _same_path(Path(output_folder) / pdf_name, pdf_file):
+        print("❌ 输出 PDF 与输入 PDF 路径相同，请修改输出文件名")
+        return False
+    dpi = get_int(config, '排版参数', 'dpi', 300)
+    quality = get_int(config, 'PDF参数', 'pdf_质量', 85)
+    w = get_int(config, '排版参数', '页面宽度_mm', 210)
+    h = get_int(config, '排版参数', '页面高度_mm', 297)
+    gap = get_int(config, '排版参数', '间距_mm', 3)
+    n = get_int(config, '排版参数', '每页题目数', 2)
+    if not (36 <= dpi <= 600 and 1 <= quality <= 100 and n >= 1 and gap >= 0 and w > 2 * gap and h > (n + 1) * gap):
+        print("❌ 排版参数无效，请检查纸张、每页题目数、间距、DPI（36–600）与质量（1–100）")
+        return False
+
     Path(output_folder).mkdir(parents=True, exist_ok=True)
     print(f"📁 输出文件夹: {output_folder}")
+    if input_type == 'pdf':
+        print(f"📥 输入形式: PDF 文件（每页=一张卡片）: {pdf_file or '(未配置)'}")
+    else:
+        print(f"📥 输入形式: 图片文件夹: {input_folder}")
     if only_pdf:
         print("🗑  只生成PDF: 是（合并完成后删除 pages/ 与 layout/ 中间文件夹）")
     print("-" * 60)
 
     src_folder = input_folder
-    if pdf_enabled:
+    if input_type == 'pdf':
         if not step_pdf_to_pages(config, pdf_file, output_folder):
             print("\n❌ 步骤失败: 执行_pdf转图片")
             return False
         src_folder = str(Path(output_folder) / "pages")
     else:
-        print(f"📁 直接使用卡片JPG文件夹: {src_folder}")
+        print(f"📁 直接使用图片文件夹: {src_folder}")
     print("-" * 60)
 
     if get_bool(config, '步骤控制', '执行_排版页面', True):
@@ -430,13 +508,10 @@ def engine_main(config_path):
         if not merged:
             print("\n⚠️  已勾选「只生成pdf文件」，但「执行_合并pdf」未执行，跳过清理中间文件")
         else:
-            protected = [Path(input_folder)]
-            # 唯一例外：输入文件夹就是本次由PDF转出的 pages/（派生中间产物，可清理）
-            derived_pages = Path(output_folder) / "pages"
-            if pdf_enabled and _same_path(input_folder, derived_pages):
-                protected = []
-            if pdf_file:
-                protected.append(Path(pdf_file))
+            if input_type == 'pdf':
+                protected = [Path(pdf_file)] if pdf_file else []
+            else:
+                protected = [Path(input_folder)]
             step_cleanup_intermediate(output_folder, protected)
 
     print("\n" + "=" * 60)
@@ -444,13 +519,13 @@ def engine_main(config_path):
     pdf_name = get_str(config, '路径设置', 'pdf文件名', 'output.pdf')
     print(f"📄 PDF文件: {Path(output_folder) / pdf_name}")
     if only_pdf and merged:
-        print("🗑  只生成PDF模式：pages/ 与 layout/ 中间文件夹已清理")
+        print("🗑  只生成PDF模式：清理结果见上方记录，涉及用户输入的目录会保留")
     print("=" * 60)
     return True
 
 
 def main():
-    """命令行入口：python pdf_maker.py [--config 配置文件]"""
+    """命令行入口：python core/pdf_engine.py [--config 配置文件]"""
     args = sys.argv[1:]
     config_path = None
     if '--config' in args:
@@ -458,7 +533,7 @@ def main():
         if i + 1 < len(args):
             config_path = args[i + 1]
     if config_path is None:
-        config_path = str(Path(__file__).resolve().parent / "config.ini")
+        config_path = str(Path(__file__).resolve().parent.parent / "config.ini")
     ok = engine_main(config_path)
     sys.exit(0 if ok else 1)
 
