@@ -7,7 +7,13 @@
 > 将 PDF 或图片文件夹中的题目卡片，一键排版为适合打印的做题本。支持 MarginNote 导出的卡片 PDF、自行整理的题目截图，以及 A4、B5、A5 等纸张。
 > 生成的pdf格式可以用于打印为纸质版的错题本，从而提高刷错题的效率🚀。
 
-![](./assets/hero.png)
+![SYNC题本神器项目插画](./assets/hero.png)
+
+**最新版应用界面**
+
+![SYNC题本神器最新版：题目来源选择、纸张设置、排版示意与一键生成 PDF](./assets/ui-latest.png)
+
+最新版采用简洁浅色工作台，支持切换 PDF 和图片文件夹两种题目来源；右侧展示排版示意。
 
 
 可以用于：
@@ -24,17 +30,17 @@
 <table align="center" width="100%">
   <tr>
     <td align="center" width="33.33%">
-      <img src="./assets/IMG_2178.PNG" alt="做题本生成器界面1" width="100%"/>
+      <img src="./assets/IMG_2178.PNG" alt="MarginNote 中选择题目卡片" width="100%"/>
       <br/>
       <b>选中卡片导出</b>
     </td>
     <td align="center" width="33.33%">
-      <img src="./assets/IMG_2179.PNG" alt="做题本生成器界面2" width="100%"/>
+      <img src="./assets/IMG_2179.PNG" alt="MarginNote 导出卡片 PDF" width="100%"/>
       <br/>
       <b>导出为pdf</b>
     </td>
     <td align="center" width="33.33%">
-      <img src="./assets/IMG_2180.PNG" alt="做题本生成器界面3" width="100%"/>
+      <img src="./assets/IMG_2180.PNG" alt="保存导出的题目 PDF" width="100%"/>
       <br/>
       <b>分享并保存pdf</b>
     </td>
@@ -76,25 +82,14 @@
 
 之后每次改完源码，重新双击该脚本即可更新 `dist` 中的应用。
 
-如果只想要最终成品，可勾选界面上的**「只生成 PDF 文件」**（对应 `config.ini` 里的 `[输出设置] 只生成pdf文件 = true`）：
+如果只想要最终成品，可勾选界面上的**「仅保留成品 PDF，完成后清理中间文件」**（对应 `config.ini` 里的 `[输出设置] 只生成pdf文件 = true`）：
 合并PDF成功后会自动删除输出目录下的 `pages/`、`layout/` 中间文件夹，只留下最终 PDF。
 该选项仅清理输出目录中的中间结果，不会动你自己的输入文件（输入PDF、输入文件夹在清理范围内时会自动跳过）。
-
-![alt text](./assets/image.png)
 
 完成后打开输出目录获得成品！~
 
 
-<table align="center" width="100%">
-  <tr>
-    <td align="center" width="50%">
-      <img src="./assets/finder.png" alt="做题本生成器界面1" width="100%"/>
-    </td>
-    <td align="center" width="50%">
-      <img src="./assets/pdf.png" alt="做题本生成器界面2" width="100%"/>
-    </td>
-  </tr>
-</table>
+![做题本 PDF 成品排版示例](./assets/pdf.png)
 
 1. mac系统：直接下载 [release](https://github.com/CCCCOOH/exercise-book-generator/releases/tag/mac)即可按照上述方式执行。
 2. 非mac系统：
