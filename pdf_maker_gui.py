@@ -72,7 +72,7 @@ except ImportError:  # pragma: no cover - 提示用户用对的解释器
 APP_DIR = Path(__file__).resolve().parent
 DEFAULT_CONFIG_PATH = APP_DIR / "config.ini"
 DEFAULT_PDF_MAKER = APP_DIR / "core" / "pdf_engine.py"
-APP_DATA_NAME = "ZuotiBenPdfTool"   # 打包后的用户数据目录名
+APP_DATA_NAME = "ZuotiBenPdfTool"   # 保留历史数据目录，应用更名后继续读取原有设置
 
 
 # ============================================================
@@ -259,7 +259,7 @@ class PdfMakerGUI:
     # ---------------- 界面构建 ----------------
 
     def _build_ui(self):
-        self.root.title("SYNC · 做题本")
+        self.root.title("SYNC题本神器")
         self.root.geometry("1120x820")
         self.root.minsize(980, 740)
         self.root.configure(bg="#ffffff")

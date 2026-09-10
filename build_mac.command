@@ -13,7 +13,7 @@
 #   ./build_mac.command --no-install    # 缺少依赖时不自动安装，直接报错
 #   ./build_mac.command --help
 #
-# 产物：dist/ZuotiBenPdfTool.app
+# 产物：dist/SYNC题本神器.app
 #   dist/ 里的其它文件（如 ReadMe_macOS.txt）不会被删除。
 #
 # 应用图标：自动把根目录的 icon.png 转成 macOS 的 icon.icns（缺 icon.png 时跳过，
@@ -31,7 +31,7 @@ set -uo pipefail
 cd "$(dirname "$0")" || exit 1
 ROOT="$(pwd)"
 
-APP_NAME="ZuotiBenPdfTool"
+APP_NAME="SYNC题本神器"
 SPEC="$ROOT/$APP_NAME.spec"
 DIST="$ROOT/dist"
 APP="$DIST/$APP_NAME.app"
@@ -315,6 +315,7 @@ app = BUNDLE(
     name='$APP_NAME.app',
     icon=$ICON_SPEC,
     bundle_identifier='com.sy.zuotibenpdf',
+    info_plist={'CFBundleDisplayName': '$APP_NAME', 'CFBundleName': '$APP_NAME'},
 )
 SPEC_EOF
   ok "已生成：$SPEC"

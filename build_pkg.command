@@ -1,5 +1,5 @@
 #!/bin/bash
-# 双击：重新打包最新应用，生成 dist/ZuotiBenPdfTool.pkg，并打开 dist。
+# 双击：重新打包最新应用，生成 dist/SYNC题本神器.pkg，并打开 dist。
 # --skip-app-build  使用 dist 中现有应用（不重新打包）
 # --no-open         不自动打开 Finder
 # --version 1.0.0   指定安装包版本（默认读取 pyproject.toml）
@@ -8,7 +8,7 @@
 set -uo pipefail
 cd "$(dirname "$0")" || exit 1
 ROOT="$(pwd)"
-APP_NAME="ZuotiBenPdfTool"
+APP_NAME="SYNC题本神器"
 APP="$ROOT/dist/$APP_NAME.app"
 OUTPUT="$ROOT/dist/$APP_NAME.pkg"
 REBUILD=1
@@ -75,11 +75,11 @@ fi
 cat > "$STAGE/distribution.xml" <<XML
 <?xml version="1.0" encoding="utf-8"?>
 <installer-gui-script minSpecVersion="2">
-  <title>SYNC 做题本</title>
+  <title>SYNC题本神器</title>
   <options customize="never" require-scripts="false" hostArchitectures="$HOST_ARCHS" rootVolumeOnly="true"/>
   <domains enable_localSystem="true" enable_currentUserHome="false" enable_anywhere="false"/>
   <choices-outline><line choice="application"/></choices-outline>
-  <choice id="application" visible="false" title="SYNC 做题本">
+  <choice id="application" visible="false" title="SYNC题本神器">
     <pkg-ref id="com.sy.zuotibenpdf.pkg"/>
   </choice>
   <pkg-ref id="com.sy.zuotibenpdf.pkg" version="$VERSION" onConclusion="none">application.pkg</pkg-ref>

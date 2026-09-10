@@ -1,4 +1,4 @@
-## SYNC 题本神器
+## SYNC题本神器
 
 <div align="center">
   <img src="./assets/icon.png" alt="项目图标" width="200" />
@@ -62,7 +62,7 @@
 - 自动查找带 Tk 的 Python 3.13+，准备独立打包环境和依赖。
 - 使用项目图标打包最新源码，校验签名与 Tcl/Tk 运行库。
 - 使用打包后的应用分别验证 PDF、图片文件夹两种输入，检查成品页数、纸张尺寸及中间文件清理。
-- 全部成功后更新 `dist/ZuotiBenPdfTool.app`，自动打开 `dist`。打包或自检失败时保留旧版应用；`dist` 内其它文件也会保留。
+- 全部成功后更新 `dist/SYNC题本神器.app`，自动打开 `dist`。打包或自检失败时保留旧版应用；`dist` 内其它文件也会保留。
 
 首次运行可能需要联网安装依赖。产物对应当前 Mac 的处理器架构；这不是跨架构打包或 Apple 公证流程。打包日志在 `build/packaging.log`。
 
@@ -116,7 +116,7 @@ git clone https://github.com/CCCCOOH/exercise-book-generator.git
 
 生成 macOS 安装包（PKG）：
 
-在 Finder 中双击 **`build_pkg.command`**，脚本会先重新打包并自检最新版应用，再生成 `dist/ZuotiBenPdfTool.pkg`，完成后打开 `dist`。双击该 PKG，按照 macOS 安装器提示即可安装到 `/Applications/ZuotiBenPdfTool.app`。生成脚本不会自动安装，也不需要管理员权限；安装时由系统请求权限。
+在 Finder 中双击 **`build_pkg.command`**，脚本会先重新打包并自检最新版应用，再生成 `dist/SYNC题本神器.pkg`，完成后打开 `dist`。双击该 PKG，按照 macOS 安装器提示即可安装到 `/Applications/SYNC题本神器.app`。生成脚本不会自动安装，也不需要管理员权限；安装时由系统请求权限。
 
 ```sh
 ./build_pkg.command
