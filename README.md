@@ -7,6 +7,9 @@
 > 简介：由于MarginNote导出的卡片不符合A4格式，无法直接打印。本项目提供了对应的功能，通过python工作流实现将MarginNote导出的卡片pdf一键自动处理为可以用于打印的A4错题本，并支持调整页面可容纳的题目数量。
 > 生成的pdf格式可以用于打印为纸质版的错题本，从而提高刷错题的效率🚀。
 
+![](./assets/hero.png)
+
+
 可以用于：
 - 制作题本。
 - 导出错题集为错题本。
@@ -62,7 +65,5 @@
 ```sh
 # 克隆本repo
 git clone https://github.com/CCCCOOH/exercise-book-generator.git
-# 安装依赖相关依赖...
+# 请自行编译和安装依赖相关依赖...
 ```
-
-> 由于本人手边暂时没有windows电脑，暂时没法儿给windows编译，非mac用户可以用Agent Harness或其他AI工具辅助完成环境的搭建。
