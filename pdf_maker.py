@@ -11,6 +11,7 @@ pdf_maker.py —— 做题本 PDF 生成引擎（纯 Python，无系统工具依
   步骤2: 排版 —— 每张纸按“每页题目数”等分成 N 个横条，
         题目在各自格内缩放适配、顶部对齐（下方留白供书写）      [Pillow]
   步骤3: 把排版好的页面合并为最终PDF（物理尺寸 = 所选纸张）     [PyMuPDF]
+  步骤4(可选): 「只生成pdf文件」模式下删除 pages/ 与 layout/ 中间文件夹
 
 需要：pip install pymupdf pillow
 用法：
@@ -19,6 +20,7 @@ pdf_maker.py —— 做题本 PDF 生成引擎（纯 Python，无系统工具依
 """
 
 import sys
+import shutil
 import configparser
 from pathlib import Path
 
@@ -285,6 +287,84 @@ def step_merge_to_pdf(config, input_folder, output_folder):
 
 
 # ============================================================
+# 步骤4(可选): 只生成PDF —— 清理 pages/ 与 layout/ 中间文件夹
+# ============================================================
+
+def dir_size(folder):
+    """统计文件夹内所有文件的总字节数（用于显示释放的空间）"""
+    total = 0
+    for p in Path(folder).rglob("*"):
+        try:
+            if p.is_file():
+                total += p.stat().st_size
+        except OSError:
+            pass
+    return total
+
+
+def _is_inside(path, folder):
+    """path 是否就是 folder 本身，或位于 folder 之内"""
+    try:
+        Path(path).resolve().relative_to(Path(folder).resolve())
+        return True
+    except ValueError:
+        return False
+
+
+def _same_path(a, b):
+    """两个路径是否指向同一位置"""
+    return Path(a).resolve() == Path(b).resolve()
+
+
+def _protect_reason(target, protected_paths):
+    """target 若会波及用户自己的输入（源文件夹/输入PDF），返回原因；否则 None"""
+    for p in protected_paths:
+        if p is None:
+            continue
+        if _is_inside(p, target):
+            return f"其中包含用户输入 {p}"
+    return None
+
+
+def step_cleanup_intermediate(output_folder, protected_paths=()):
+    """删除输出目录下的 pages/ 与 layout/ 中间文件夹，只保留最终PDF。
+
+    protected_paths 中的路径（用户提供的输入文件夹 / 输入PDF）若位于待删除
+    目录之内，则跳过该目录，避免误删用户自己的文件。"""
+    print("\n" + "=" * 60)
+    print("步骤4: 清理中间文件（只保留最终PDF）")
+    print("=" * 60)
+
+    targets = [Path(output_folder) / "pages", Path(output_folder) / "layout"]
+    freed = 0
+    failed = 0
+
+    for target in targets:
+        if not target.exists():
+            print(f"  ⏭  跳过（不存在）: {target}")
+            continue
+        reason = _protect_reason(target, protected_paths)
+        if reason:
+            print(f"  ⚠️  跳过（{reason}）: {target}")
+            continue
+        size = dir_size(target)
+        try:
+            shutil.rmtree(target)
+        except Exception as e:
+            failed += 1
+            print(f"  ❌ 删除失败 {target}: {e}")
+            continue
+        freed += size
+        print(f"  🗑  已删除: {target}（释放 {human_size(size)}）")
+
+    if failed:
+        print(f"⚠️  有 {failed} 个中间文件夹未能删除，请手动清理")
+        return False
+    print(f"✅ 中间文件已清理，共释放 {human_size(freed)}，输出目录仅保留最终PDF")
+    return True
+
+
+# ============================================================
 # 主流程
 # ============================================================
 
@@ -310,9 +390,12 @@ def engine_main(config_path):
     output_folder = get_str(config, '路径设置', '输出文件夹', './output')
     pdf_enabled = get_bool(config, '步骤控制', '执行_pdf转图片', False)
     pdf_file = get_str(config, '路径设置', '输入pdf文件', '')
+    only_pdf = get_bool(config, '输出设置', '只生成pdf文件', False)
 
     Path(output_folder).mkdir(parents=True, exist_ok=True)
     print(f"📁 输出文件夹: {output_folder}")
+    if only_pdf:
+        print("🗑  只生成PDF: 是（合并完成后删除 pages/ 与 layout/ 中间文件夹）")
     print("-" * 60)
 
     src_folder = input_folder
@@ -333,17 +416,35 @@ def engine_main(config_path):
         print("\n⏭️  跳过: 执行_排版页面")
 
     layout_dir = str(Path(output_folder) / "layout")
+    merged = False
     if get_bool(config, '步骤控制', '执行_合并pdf', True):
         if not step_merge_to_pdf(config, layout_dir, output_folder):
             print("\n❌ 步骤失败: 执行_合并pdf")
             return False
+        merged = True
     else:
         print("\n⏭️  跳过: 执行_合并pdf")
+
+    # 只有真正拿到最终PDF后才清理中间文件，避免把生成失败的中间结果删掉
+    if only_pdf:
+        if not merged:
+            print("\n⚠️  已勾选「只生成pdf文件」，但「执行_合并pdf」未执行，跳过清理中间文件")
+        else:
+            protected = [Path(input_folder)]
+            # 唯一例外：输入文件夹就是本次由PDF转出的 pages/（派生中间产物，可清理）
+            derived_pages = Path(output_folder) / "pages"
+            if pdf_enabled and _same_path(input_folder, derived_pages):
+                protected = []
+            if pdf_file:
+                protected.append(Path(pdf_file))
+            step_cleanup_intermediate(output_folder, protected)
 
     print("\n" + "=" * 60)
     print("🎉 所有步骤完成！")
     pdf_name = get_str(config, '路径设置', 'pdf文件名', 'output.pdf')
     print(f"📄 PDF文件: {Path(output_folder) / pdf_name}")
+    if only_pdf and merged:
+        print("🗑  只生成PDF模式：pages/ 与 layout/ 中间文件夹已清理")
     print("=" * 60)
     return True
 

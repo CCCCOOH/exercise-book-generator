@@ -14,3 +14,9 @@ buildenv/
 dist/
 *.spec
 .DS_Store
+
+# 打包脚本 build_mac.command 使用的 PyInstaller 缓存
+.pyinstaller/
+
+# 打包脚本创建的环境
+.venv-build/

@@ -9,6 +9,7 @@ pdf_maker_gui.py — “做题本 PDF 生成工具”图形界面封装
 
     * 选择输入PDF文件（每页=一张卡片）与输出文件夹；旧方式（直接用JPG文件夹）也可用
     * 勾选要执行的步骤（PDF转图片 → 排版A4 → 合并PDF）
+    * 可勾选「只生成 PDF 文件」：脚本结束后自动删除 pages/ 与 layout/ 中间文件夹
     * 修改全部参数（纸张预设 A4/B5/A5…、每张纸题目数、PDF文件名…；DPI/间距/压缩质量保留在 config.ini 默认值，可按需微调）
     * 「开始生成」前自动把界面参数写回 config.ini，再后台运行 pdf_maker.py
     * 日志实时显示，运行中可随时「停止」
@@ -105,6 +106,9 @@ DEFAULTS = {
     },
     "PDF参数": {
         "pdf_质量": "80",
+    },
+    "输出设置": {
+        "只生成pdf文件": "false",
     },
 }
 
@@ -259,6 +263,7 @@ class PdfMakerGUI:
 
         self._build_path_frame(left).pack(fill="x")
         self._build_steps_frame(left).pack(fill="x", pady=(8, 0))
+        self._build_output_frame(left).pack(fill="x", pady=(8, 0))
         self._build_paper_frame(right).pack(fill="x")
         self._build_layout_frame(right).pack(fill="x", pady=(8, 0))
         self._sync_input_rows()  # 按“从PDF提取页面”开关初始化输入行显隐
@@ -388,6 +393,26 @@ class PdfMakerGUI:
             )
             cb.grid(row=i, column=0, sticky="w", pady=2)
             self.lock_widgets.append(cb)
+        return frame
+
+    def _build_output_frame(self, parent):
+        """输出选项：只保留最终PDF（结束后删除 pages/ 与 layout/）"""
+        frame = ttk.LabelFrame(parent, text="🗂  输出选项", padding=(10, 4))
+        section, key = "输出设置", "只生成pdf文件"
+        var = tk.BooleanVar(value=self._bool_default(section, key))
+        self.vars[(section, key)] = var
+        cb = ttk.Checkbutton(
+            frame,
+            text="只生成 PDF 文件（结束后删除 pages / layout 中间文件夹）",
+            variable=var,
+        )
+        cb.grid(row=0, column=0, sticky="w", pady=1)
+        self.lock_widgets.append(cb)
+        ttk.Label(
+            frame,
+            text="勾选后输出目录只保留最终PDF；需同时勾选第 3 步「合并为单个 PDF」",
+            style="Hint.TLabel",
+        ).grid(row=1, column=0, sticky="w")
         return frame
 
     def _build_paper_frame(self, parent):
@@ -566,6 +591,15 @@ class PdfMakerGUI:
             if not Path(pdf).exists():
                 messagebox.showerror("找不到文件", f"输入PDF不存在：\n{pdf}")
                 return False
+
+        # 「只生成 PDF 文件」依赖合并步骤产出最终PDF，否则没有可保留的结果
+        if self.vars[("输出设置", "只生成pdf文件")].get() and not self._step_vars["执行_合并pdf"].get():
+            messagebox.showerror(
+                "选项冲突",
+                "已勾选「只生成 PDF 文件」，但没有勾选第 3 步「合并为单个 PDF」。\n"
+                "请勾上该步骤（否则不会生成PDF，也没有中间文件可清理）。",
+            )
+            return False
         return True
 
     # ---------------- 运行控制 ----------------
