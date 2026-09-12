@@ -132,6 +132,199 @@ def mm_to_pt(mm):
 def human_size(size):
     return f"{size/1024:.2f} KB" if size < 1024 * 1024 else f"{size/1024/1024:.2f} MB"
 
+
+# ============================================================
+# 可选封面
+# ============================================================
+
+def _cover_font(size, bold=False):
+    """取系统中的中日韩字体；找不到时仍可生成英文封面。"""
+    from PIL import ImageFont
+
+    candidates = (
+        ("/System/Library/Fonts/PingFang.ttc", 2 if bold else 0),
+        ("/System/Library/Fonts/Hiragino Sans GB.ttc", 6 if bold else 0),
+        ("/System/Library/Fonts/Supplemental/Arial Unicode.ttf", 0),
+        ("C:/Windows/Fonts/msyhbd.ttc" if bold else "C:/Windows/Fonts/msyh.ttc", 0),
+    )
+    for path, index in candidates:
+        try:
+            return ImageFont.truetype(path, size=size, index=index)
+        except OSError:
+            continue
+    return ImageFont.load_default()
+
+
+def _wrap_cover_text(draw, text, font, max_width):
+    """按实际字形宽度换行，中文与英文都能自然排版。"""
+    lines = []
+    for paragraph in str(text or "").splitlines() or [""]:
+        line = ""
+        for char in paragraph:
+            candidate = line + char
+            if line and draw.textbbox((0, 0), candidate, font=font)[2] > max_width:
+                lines.append(line)
+                line = char
+            else:
+                line = candidate
+        lines.append(line or " ")
+    return lines
+
+
+def _cover_image_as_rgb(image_path):
+    """读取用户封面图，不改变原文件，并处理透明背景和照片方向。"""
+    from PIL import Image, ImageOps
+
+    with Image.open(image_path) as original:
+        oriented = ImageOps.exif_transpose(original)
+        rgba = oriented.convert("RGBA")
+        result = Image.new("RGB", rgba.size, "#f4f1eb")
+        result.paste(rgba, mask=rgba.getchannel("A"))
+        return result
+
+
+def _paste_cover_image(canvas, source, box):
+    """等比裁切填满封面视觉区。"""
+    from PIL import Image
+
+    left, top, right, bottom = box
+    bw, bh = right - left, bottom - top
+    scale = max(bw / source.width, bh / source.height)
+    size = (max(1, round(source.width * scale)), max(1, round(source.height * scale)))
+    fitted = source.resize(size, Image.LANCZOS)
+    x = (fitted.width - bw) // 2
+    y = (fitted.height - bh) // 2
+    canvas.paste(fitted.crop((x, y, x + bw, y + bh)), (left, top))
+
+
+def make_cover_image(config, output_folder):
+    """生成一张适配纸张的封面临时图，并返回其路径；未启用时返回 None。"""
+    if not get_bool(config, "封面设置", "生成封面", False):
+        return None
+
+    Image = _import_pil()
+    if Image is None:
+        return None
+    from PIL import ImageDraw
+
+    width = mm_to_px(get_int(config, "排版参数", "页面宽度_mm", 210),
+                     get_int(config, "排版参数", "dpi", 300))
+    height = mm_to_px(get_int(config, "排版参数", "页面高度_mm", 297),
+                      get_int(config, "排版参数", "dpi", 300))
+    title = get_str(config, "封面设置", "标题", "").strip() or "我的做题本"
+    description = get_str(config, "封面设置", "描述", "").strip()
+    cover_image = get_str(config, "封面设置", "封面图片", "").strip()
+    quality = get_int(config, "PDF参数", "pdf_质量", 85)
+
+    canvas = Image.new("RGB", (width, height), "#f7f6f2")
+    draw = ImageDraw.Draw(canvas)
+    accent = "#2e7964"
+    soft_accent = "#dcebe5"
+    margin = max(36, round(width * .09))
+    visual_top = margin
+    visual_h = round(height * .36)
+    visual_box = (margin, visual_top, width - margin, visual_top + visual_h)
+
+    if cover_image:
+        source = _cover_image_as_rgb(cover_image)
+        _paste_cover_image(canvas, source, visual_box)
+        # 底部浅色渐变，让长标题始终清楚易读。
+        for offset in range(round(visual_h * .45)):
+            y = visual_box[3] - offset - 1
+            alpha = 1 - offset / max(1, visual_h * .45)
+            shade = int(247 * alpha + 35 * (1 - alpha))
+            draw.line((visual_box[0], y, visual_box[2], y), fill=(shade, shade, shade))
+    else:
+        draw.rounded_rectangle(visual_box, radius=round(width * .025), fill=soft_accent)
+        draw.ellipse((width - margin - round(width * .22), visual_top - round(width * .07),
+                      width - margin + round(width * .04), visual_top + round(width * .19)),
+                     fill="#b8d8cb")
+        draw.rounded_rectangle((margin + round(width * .08), visual_top + round(visual_h * .26),
+                                margin + round(width * .54), visual_top + round(visual_h * .52)),
+                               radius=round(width * .018), fill="#f7f6f2")
+
+    line_y = visual_box[3] + round(height * .085)
+    draw.rectangle((margin, line_y, margin + round(width * .13), line_y + max(5, round(width * .009))), fill=accent)
+    title_y = line_y + round(height * .045)
+    footer_font = _cover_font(max(15, round(width * .025)))
+    footer = "SYNC题本神器  ·  专注练习，自由书写"
+    footer_box = draw.textbbox((0, 0), footer, font=footer_font)
+    available_height = height - margin - (footer_box[3] - footer_box[1]) - title_y
+    title_size = max(26, round(width * .085))
+    description_size = max(16, round(width * .036))
+    max_text_width = width - 2 * margin
+    # 短标题保持醒目；长标题/描述自动缩小到适合封面正文区。
+    while True:
+        title_font = _cover_font(title_size, bold=True)
+        description_font = _cover_font(description_size)
+        title_lines = _wrap_cover_text(draw, title, title_font, max_text_width)
+        description_lines = _wrap_cover_text(draw, description, description_font, max_text_width) if description else []
+        text_height = (len(title_lines) * round(title_font.size * 1.22) +
+                       (round(height * .035) if description_lines else 0) +
+                       len(description_lines) * round(description_font.size * 1.55))
+        if text_height <= available_height or (title_size <= 26 and description_size <= 16):
+            break
+        if title_size > 26:
+            title_size -= 2
+        elif description_size > 16:
+            description_size -= 1
+
+    for line in title_lines:
+        draw.text((margin, title_y), line, font=title_font, fill="#202522")
+        title_y += round(title_font.size * 1.22)
+
+    if description_lines:
+        title_y += round(height * .018)
+        line_height = round(description_font.size * 1.55)
+        available_lines = max(1, (height - margin - (footer_box[3] - footer_box[1]) - title_y) // line_height)
+        visible_lines = description_lines[:available_lines]
+        if len(visible_lines) < len(description_lines):
+            visible_lines[-1] = visible_lines[-1].rstrip() + "…"
+        for line in visible_lines:
+            draw.text((margin, title_y), line, font=description_font, fill="#5b625e")
+            title_y += line_height
+
+    draw.text((margin, height - margin - (footer_box[3] - footer_box[1])), footer,
+              font=footer_font, fill=accent)
+
+    temporary = tempfile.NamedTemporaryFile(suffix=".jpg", dir=output_folder, delete=False)
+    temporary.close()
+    path = Path(temporary.name)
+    try:
+        canvas.save(path, "JPEG", quality=quality, dpi=(get_int(config, "排版参数", "dpi", 300),) * 2)
+    except Exception:
+        path.unlink(missing_ok=True)
+        raise
+    return path
+
+
+def validate_cover_settings(config, output_folder):
+    """验证可选封面设置，避免生成期间覆盖用户封面图。"""
+    if not get_bool(config, "封面设置", "生成封面", False):
+        return True
+    title = get_str(config, "封面设置", "标题", "").strip()
+    description = get_str(config, "封面设置", "描述", "").strip()
+    image = get_str(config, "封面设置", "封面图片", "").strip()
+    if not title or len(title) > 64 or len(description) > 240:
+        print("❌ 封面标题不能为空且不超过 64 个字符；描述不超过 240 个字符")
+        return False
+    if not image:
+        return True
+    path = Path(image)
+    if not path.is_file() or path.suffix.casefold() not in IMAGE_EXTENSIONS:
+        print("❌ 封面图片不存在或格式不支持（支持 JPG、PNG、WebP、BMP、TIFF）")
+        return False
+    for protected_dir in (Path(output_folder) / "pages", Path(output_folder) / "layout"):
+        if _is_inside(path, protected_dir):
+            print("❌ 封面图片位于输出 pages/layout 中，请选择其他图片以保护原文件")
+            return False
+    try:
+        _cover_image_as_rgb(path)
+    except Exception as exc:
+        print(f"❌ 无法读取封面图片: {exc}")
+        return False
+    return True
+
 # ============================================================
 # 步骤1: PDF → 每页卡片图
 # ============================================================
@@ -311,7 +504,15 @@ def step_merge_to_pdf(config, input_folder, output_folder):
 
     pt_w = mm_to_pt(page_w_mm)
     pt_h = mm_to_pt(page_h_mm)
-    print(f"找到 {len(jpg_files)} 张页面图")
+    cover_path = None
+    try:
+        cover_path = make_cover_image(config, output_folder)
+    except Exception as exc:
+        print(f"❌ 生成封面失败: {exc}")
+        return False
+
+    page_count = len(jpg_files) + (1 if cover_path else 0)
+    print(f"找到 {len(jpg_files)} 张题目页面图" + ("，另加 1 张封面" if cover_path else ""))
     print(f"纸张: {page_w_mm}×{page_h_mm}mm → PDF页 {pt_w:.1f}×{pt_h:.1f}pt")
     print(f"输出: {pdf_file}")
 
@@ -320,6 +521,9 @@ def step_merge_to_pdf(config, input_folder, output_folder):
         with tempfile.NamedTemporaryFile(suffix='.pdf', dir=output_folder, delete=False) as tmp:
             temporary = Path(tmp.name)
         with import_pymupdf.open() as doc:
+            if cover_path:
+                cover = doc.new_page(width=pt_w, height=pt_h)
+                cover.insert_image(cover.rect, filename=str(cover_path))
             for f in jpg_files:
                 page = doc.new_page(width=pt_w, height=pt_h)
                 page.insert_image(page.rect, filename=str(f))
@@ -331,9 +535,11 @@ def step_merge_to_pdf(config, input_folder, output_folder):
     finally:
         if temporary is not None:
             temporary.unlink(missing_ok=True)
+        if cover_path is not None:
+            cover_path.unlink(missing_ok=True)
 
     size = pdf_file.stat().st_size
-    print(f"✅ PDF生成成功! 大小: {human_size(size)}, 页数: {len(jpg_files)}")
+    print(f"✅ PDF生成成功! 大小: {human_size(size)}, 页数: {page_count}")
     return True
 
 
@@ -465,6 +671,8 @@ def engine_main(config_path):
     if not (36 <= dpi <= 600 and 1 <= quality <= 100 and n >= 1 and gap >= 0 and w > 2 * gap and h > (n + 1) * gap):
         print("❌ 排版参数无效，请检查纸张、每页题目数、间距、DPI（36–600）与质量（1–100）")
         return False
+    if not validate_cover_settings(config, output_folder):
+        return False
 
     Path(output_folder).mkdir(parents=True, exist_ok=True)
     print(f"📁 输出文件夹: {output_folder}")
@@ -474,6 +682,8 @@ def engine_main(config_path):
         print(f"📥 输入形式: 图片文件夹: {input_folder}")
     if only_pdf:
         print("🗑  只生成PDF: 是（合并完成后删除 pages/ 与 layout/ 中间文件夹）")
+    if get_bool(config, "封面设置", "生成封面", False):
+        print(f"📕 封面: {get_str(config, '封面设置', '标题', '').strip()}")
     print("-" * 60)
 
     src_folder = input_folder
@@ -512,6 +722,9 @@ def engine_main(config_path):
                 protected = [Path(pdf_file)] if pdf_file else []
             else:
                 protected = [Path(input_folder)]
+            cover_image = get_str(config, "封面设置", "封面图片", "").strip()
+            if cover_image:
+                protected.append(Path(cover_image))
             step_cleanup_intermediate(output_folder, protected)
 
     print("\n" + "=" * 60)

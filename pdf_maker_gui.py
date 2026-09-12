@@ -131,6 +131,12 @@ DEFAULTS = {
     "输出设置": {
         "只生成pdf文件": "false",
     },
+    "封面设置": {
+        "生成封面": "false",
+        "标题": "我的做题本",
+        "描述": "",
+        "封面图片": "",
+    },
 }
 
 # 输入形式（写入 config.ini 的 输入类型）
@@ -282,6 +288,7 @@ class PdfMakerGUI:
         style.map("Source.TRadiobutton", background=[("selected", "#e5eee9"), ("active", "#eeeeee")])
         style.configure("TCheckbutton", background="#ffffff", padding=4)
         style.configure("TProgressbar", troughcolor="#f1f1f1", background="#33836c", borderwidth=0, thickness=4)
+        self._init_cover_variables()
 
         sidebar = tk.Frame(self.root, bg="#f7f7f8", width=200)
         sidebar.pack(side="left", fill="y")
@@ -293,6 +300,9 @@ class PdfMakerGUI:
         save = ttk.Button(sidebar, text="保存当前设置", command=self.save_config)
         save.pack(fill="x", padx=12, pady=4)
         self.lock_widgets.append(save)
+        cover = ttk.Button(sidebar, text="封面设置", command=self.open_cover_settings)
+        cover.pack(fill="x", padx=12, pady=4)
+        self.lock_widgets.append(cover)
         tk.Label(sidebar, text="本地处理 · 专注练习\n题目文件留在你的设备上", justify="left", bg="#f7f7f8", fg="#969696", font=(self.font, 10)).pack(side="bottom", anchor="w", padx=22, pady=24)
 
         main = ttk.Frame(self.root, padding=(32, 18, 32, 16))
@@ -474,6 +484,127 @@ class PdfMakerGUI:
         path = Path(raw).expanduser()
         return path if path.is_absolute() else self.base_dir / path
 
+    # ---------------- 封面设置 ----------------
+
+    def _init_cover_variables(self):
+        self.var_cover_enabled = tk.BooleanVar(value=self._bool_default("封面设置", "生成封面"))
+        self.var_cover_title = self._text_var("封面设置", "标题")
+        self.var_cover_description = self._text_var("封面设置", "描述")
+        self.var_cover_image = self._text_var("封面设置", "封面图片")
+        self.var_cover_summary = tk.StringVar()
+        self.vars[("封面设置", "生成封面")] = self.var_cover_enabled
+        self._cover_dialog = None
+        self._cover_fields = []
+        for var in (self.var_cover_enabled, self.var_cover_title,
+                    self.var_cover_description, self.var_cover_image):
+            var.trace_add("write", self._refresh_cover_summary)
+        self._refresh_cover_summary()
+
+    def _refresh_cover_summary(self, *_):
+        if hasattr(self, "var_cover_summary"):
+            if self.var_cover_enabled.get():
+                title = self.var_cover_title.get().strip() or "未命名封面"
+                image = "已选图片" if self.var_cover_image.get().strip() else "纯文字设计"
+                self.var_cover_summary.set(f"封面：{title} · {image}  › 编辑")
+            else:
+                self.var_cover_summary.set("添加封面（标题、描述与可选封面图片）  ›")
+        self._set_cover_dialog_state()
+
+    def _set_cover_dialog_state(self):
+        if not self._cover_dialog or not self._cover_dialog.winfo_exists():
+            return
+        self._cover_enable_control.config(state="disabled" if self.running else "normal")
+        state = "normal" if self.var_cover_enabled.get() and not self.running else "disabled"
+        for field in self._cover_fields:
+            if isinstance(field, ttk.Combobox):
+                field.config(state="readonly" if state == "normal" else "disabled")
+            else:
+                field.config(state=state)
+        self._refresh_cover_card()
+
+    def _pick_cover_image(self):
+        raw = self.var_cover_image.get().strip()
+        initial = self._resolve_path(raw).parent if raw else self.base_dir
+        chosen = filedialog.askopenfilename(
+            parent=self._cover_dialog or self.root,
+            initialdir=str(initial),
+            title="选择封面图片",
+            filetypes=[("支持的图片", "*.jpg *.jpeg *.png *.webp *.bmp *.tif *.tiff"),
+                       ("所有文件", "*.*")],
+        )
+        if chosen:
+            self.var_cover_image.set(chosen)
+
+    def _refresh_cover_card(self, *_):
+        if not hasattr(self, "cover_card"):
+            return
+        c = self.cover_card
+        c.delete("all")
+        c.create_rectangle(32, 8, 188, 224, fill="#f7f6f2", outline="#dedede")
+        c.create_rectangle(44, 26, 176, 100, fill="#dcebe5" if not self.var_cover_image.get().strip() else "#bdd8cd", outline="")
+        c.create_rectangle(44, 118, 76, 122, fill="#2e7964", outline="")
+        title = self.var_cover_title.get().strip() or "我的做题本"
+        c.create_text(44, 138, text=title[:18], width=124, anchor="nw", font=(self.font, 11, "bold"), fill="#202522")
+        description = self.var_cover_description.get().strip()
+        c.create_text(44, 180, text=description[:44] or "标题与描述会显示在这里", width=124, anchor="nw", font=(self.font, 8), fill="#5b625e")
+        c.create_text(44, 212, text="SYNC题本神器", anchor="sw", font=(self.font, 7), fill="#2e7964")
+
+    def open_cover_settings(self):
+        if self._cover_dialog and self._cover_dialog.winfo_exists():
+            self._cover_dialog.deiconify()
+            self._cover_dialog.lift()
+            return
+        dialog = tk.Toplevel(self.root)
+        self._cover_dialog = dialog
+        dialog.title("设计题本封面")
+        dialog.geometry("650x480")
+        dialog.minsize(600, 440)
+        dialog.configure(bg="#ffffff")
+        dialog.transient(self.root)
+        dialog.columnconfigure(0, weight=1)
+        dialog.columnconfigure(1, minsize=220)
+        dialog.rowconfigure(0, weight=1)
+        form = ttk.Frame(dialog, padding=(26, 24, 18, 22))
+        form.grid(row=0, column=0, sticky="nsew")
+        ttk.Label(form, text="设计题本封面", font=(self.font, 19, "bold")).pack(anchor="w")
+        ttk.Label(form, text="封面将作为 PDF 的第一页。图片可选，标题和描述会自动排版。", style="Hint.TLabel", wraplength=360).pack(anchor="w", pady=(5, 17))
+        enabled = ttk.Checkbutton(form, text="生成题本封面", variable=self.var_cover_enabled)
+        enabled.pack(anchor="w", pady=(0, 14))
+        ttk.Label(form, text="标题", style="Hint.TLabel").pack(anchor="w")
+        title = ttk.Entry(form, textvariable=self.var_cover_title)
+        title.pack(fill="x", pady=(4, 12))
+        ttk.Label(form, text="描述（可选）", style="Hint.TLabel").pack(anchor="w")
+        description = tk.Text(form, height=4, wrap="word", font=(self.font, 11), bg="#fafafa", fg="#292929", relief="flat", borderwidth=0, padx=9, pady=8, highlightthickness=1, highlightbackground="#e5e5e5")
+        description.insert("1.0", self.var_cover_description.get())
+        description.pack(fill="x", pady=(4, 12))
+        def sync_description(_event=None):
+            self.var_cover_description.set(description.get("1.0", "end-1c"))
+        description.bind("<KeyRelease>", sync_description)
+        description.bind("<FocusOut>", sync_description)
+        ttk.Label(form, text="封面图片（可选）", style="Hint.TLabel").pack(anchor="w")
+        image_row = ttk.Frame(form)
+        image_row.pack(fill="x", pady=(4, 0))
+        image_row.columnconfigure(0, weight=1)
+        image = ttk.Entry(image_row, textvariable=self.var_cover_image)
+        image.grid(row=0, column=0, sticky="ew", padx=(0, 6))
+        choose = ttk.Button(image_row, text="选择图片", command=self._pick_cover_image)
+        choose.grid(row=0, column=1)
+        hint = ttk.Label(form, text="支持 JPG、PNG、WebP、BMP、TIFF。图片会铺满封面上方视觉区。", style="Hint.TLabel", wraplength=360)
+        hint.pack(anchor="w", pady=(7, 0))
+        preview = ttk.Frame(dialog, padding=(8, 24, 24, 22))
+        preview.grid(row=0, column=1, sticky="nsew")
+        ttk.Label(preview, text="封面预览", style="Section.TLabel").pack(anchor="w")
+        self.cover_card = tk.Canvas(preview, width=220, height=235, bg="#ffffff", highlightthickness=0)
+        self.cover_card.pack(pady=(12, 10))
+        done = ttk.Button(preview, text="完成", style="Primary.TButton", command=dialog.withdraw)
+        done.pack(fill="x")
+        self._cover_enable_control = enabled
+        self._cover_fields = [title, description, image, choose]
+        self.lock_widgets.extend([enabled, *self._cover_fields])
+        dialog.protocol("WM_DELETE_WINDOW", dialog.withdraw)
+        self._set_cover_dialog_state()
+        self._refresh_cover_card()
+
     # ---------------- 变量读写辅助 ----------------
 
     def _text_var(self, section, key):
@@ -515,6 +646,9 @@ class PdfMakerGUI:
             raw = values[("路径设置", key)]
             if raw:
                 values[("路径设置", key)] = str(self._resolve_path(raw))
+        cover_image = values[("封面设置", "封面图片")]
+        if cover_image:
+            values[("封面设置", "封面图片")] = str(self._resolve_path(cover_image))
         return values
 
     def save_config(self, show_msg=True):
@@ -597,6 +731,25 @@ class PdfMakerGUI:
         if source == INPUT_TYPE_PDF and (output / name).resolve() == path.resolve():
             messagebox.showerror("输出设置错误", "成品路径与输入 PDF 相同，请修改文件名或输出文件夹。")
             return False
+        if self.var_cover_enabled.get():
+            title = self.var_cover_title.get().strip()
+            description = self.var_cover_description.get().strip()
+            if not title or len(title) > 64 or len(description) > 240:
+                messagebox.showerror("封面信息错误", "封面标题不能为空且不超过 64 个字符；描述不超过 240 个字符。")
+                return False
+            raw_cover_image = self.var_cover_image.get().strip()
+            if raw_cover_image:
+                cover_image = self._resolve_path(raw_cover_image)
+                if not cover_image.is_file() or cover_image.suffix.casefold() not in IMAGE_EXTENSIONS:
+                    messagebox.showerror("封面图片错误", "请选择有效的封面图片。支持 JPG、PNG、WebP、BMP、TIFF。")
+                    return False
+                for reserved in (output / "pages", output / "layout"):
+                    try:
+                        cover_image.resolve().relative_to(reserved.resolve())
+                        messagebox.showerror("封面图片错误", "封面图片不能位于输出目录的 pages 或 layout 中。")
+                        return False
+                    except ValueError:
+                        pass
         return True
 
     # ---------------- 运行控制 ----------------
@@ -730,6 +883,7 @@ class PdfMakerGUI:
         self.btn_stop.config(state="normal" if flag else "disabled")
         for w in self.lock_widgets:
             w.config(state="disabled" if flag else ("readonly" if isinstance(w, ttk.Combobox) else "normal"))
+        self._set_cover_dialog_state()
         if flag:
             self.var_status.set("正在准备题目卡片…")
             self.progress.start(12)

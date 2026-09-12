@@ -378,10 +378,10 @@ fi
 ok "Tcl/Tk 运行库已打入应用"
 
 # ============================================================
-# 6/7 用冻结后的应用验证 PDF 与图片文件夹两种来源
+# 6/7 用冻结后的应用验证两种来源与可选封面
 # ============================================================
 if [ "$DO_VERIFY" = 1 ]; then
-  step "6/7 自检：PDF 和图片文件夹 → 成品 PDF"
+  step "6/7 自检：PDF、图片文件夹与可选封面 → 成品 PDF"
   if ! "$BUILD_PY" - "$BIN" <<'VERIFY_BUNDLE'
 import configparser
 import subprocess
@@ -404,7 +404,9 @@ with tempfile.TemporaryDirectory(prefix='zuotiben_verify_') as tmp:
         doc.save(source)
     for name, color in [('1.png', 'red'), ('2.jpg', 'green'), ('10.webp', 'blue')]:
         Image.new('RGB', (400, 100), color).save(images / name)
-    originals = {p: p.read_bytes() for p in [source, *images.iterdir()]}
+    cover = root / '封面图.png'
+    Image.new('RGB', (400, 200), 'red').save(cover)
+    originals = {p: p.read_bytes() for p in [source, cover, *images.iterdir()]}
     for kind in ('pdf', 'folder'):
         output = root / f'output_{kind}'
         cfg = configparser.ConfigParser(interpolation=None)
@@ -415,6 +417,12 @@ with tempfile.TemporaryDirectory(prefix='zuotiben_verify_') as tmp:
             '排版参数': {'页面宽度_mm': '210', '页面高度_mm': '297', 'dpi': '72', '每页题目数': '2', '间距_mm': '3'},
             'PDF参数': {'pdf_质量': '90'},
             '输出设置': {'只生成pdf文件': 'true'},
+            '封面设置': {
+                '生成封面': str(kind == 'folder'),
+                '标题': '自检练习册',
+                '描述': '封面应成为 PDF 第一页',
+                '封面图片': str(cover) if kind == 'folder' else '',
+            },
         })
         config_path = root / f'{kind}.ini'
         with config_path.open('w', encoding='utf-8') as f:
@@ -422,12 +430,13 @@ with tempfile.TemporaryDirectory(prefix='zuotiben_verify_') as tmp:
         subprocess.run([binary, '--cli', '--config', str(config_path)], cwd=root, check=True, timeout=120)
         result = output / '做题本.pdf'
         with pymupdf.open(result) as doc:
-            assert len(doc) == 2, f'{kind}: 应生成 2 页'
+            expected_pages = 3 if kind == 'folder' else 2
+            assert len(doc) == expected_pages, f'{kind}: 应生成 {expected_pages} 页'
             assert abs(doc[0].rect.width - 210 * 72 / 25.4) < 0.1, '纸张宽度错误'
             assert abs(doc[0].rect.height - 297 * 72 / 25.4) < 0.1, '纸张高度错误'
         assert list(output.iterdir()) == [result], f'{kind}: 中间文件未清理'
         assert all(p.read_bytes() == data for p, data in originals.items()), '原始题目文件发生变化'
-        print(f'✅ {kind}: 3 张题目卡片 → 2 页 A4 PDF，原文件完整，中间文件已清理', flush=True)
+        print(f'✅ {kind}: 3 张题目卡片 → {expected_pages} 页 A4 PDF，原文件完整，中间文件已清理', flush=True)
 VERIFY_BUNDLE
   then
     die "成品自检失败，旧版应用保持不变。"

@@ -49,6 +49,30 @@ class GuiTests(unittest.TestCase):
         self.app.vars['排版参数', '每页题目数'].set('3')
         self.assertIn('每页 3 题', self.app.var_summary.get())
 
+    def test_cover_settings_save_and_summary(self):
+        self.app.var_cover_enabled.set(True)
+        self.app.var_cover_title.set('线性代数练习册')
+        self.app.var_cover_description.set('矩阵与向量专题')
+        self.assertIn('线性代数练习册', self.app.var_cover_summary.get())
+        self.app.open_cover_settings()
+        self.root.update_idletasks()
+        self.assertTrue(self.app._cover_dialog.winfo_exists())
+        self.assertTrue(self.app.cover_card.winfo_ismapped())
+        self.app.save_config(show_msg=False)
+        values = load_config_dict(self.base / 'config.ini')
+        self.assertEqual(values['封面设置', '生成封面'], 'true')
+        self.assertEqual(values['封面设置', '标题'], '线性代数练习册')
+        self.assertEqual(values['封面设置', '描述'], '矩阵与向量专题')
+
+    def test_cover_enable_checkbox_remains_clickable_when_cover_is_off(self):
+        self.assertFalse(self.app.var_cover_enabled.get())
+        self.app.open_cover_settings()
+        self.root.update_idletasks()
+        checkbox = self.app._cover_enable_control
+        self.assertEqual(str(checkbox['state']), 'normal')
+        checkbox.invoke()
+        self.assertTrue(self.app.var_cover_enabled.get())
+
     def test_small_window_keeps_action_and_log_visible(self):
         self.root.geometry('980x740')
         self.root.update_idletasks()

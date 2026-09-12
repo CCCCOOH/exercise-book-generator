@@ -79,6 +79,68 @@ class InputTests(unittest.TestCase):
             self.assertGreater(doc[1].get_pixmap().pixel(100, 30)[2], 240)
         self.assertEqual(original, source.read_bytes())
 
+    def test_cover_with_title_description_and_image_is_first_pdf_page(self):
+        for name, color in [('1.jpg', 'green'), ('2.jpg', 'blue'), ('3.jpg', 'yellow')]:
+            Image.new('RGB', (200, 50), color).save(self.cards / name)
+        cover = self.base / '我的封面.png'
+        Image.new('RGB', (400, 200), 'red').save(cover)
+        original = cover.read_bytes()
+        self.cfg.read_dict({'封面设置': {
+            '生成封面': 'true',
+            '标题': '高等数学练习册',
+            '描述': '第 1 章：函数、极限与连续',
+            '封面图片': str(cover),
+        }})
+        ok, log = self.run_engine()
+        self.assertTrue(ok, log)
+        with pymupdf.open(self.out / '练习.pdf') as doc:
+            self.assertEqual(len(doc), 3)  # 1 封面 + 2 张排版页
+            pix = doc[0].get_pixmap()
+            r, g, b = pix.pixel(pix.width // 2, pix.height // 8)
+            self.assertGreater(r, 190)
+            self.assertLess(g, 80)
+            self.assertLess(b, 80)
+            self.assertGreater(doc[1].get_pixmap().pixel(100, 30)[1], 80)
+        self.assertEqual(cover.read_bytes(), original)
+        self.assertEqual(list(self.out.iterdir()), [self.out / '练习.pdf'])
+
+    def test_cover_without_image_uses_designed_text_page(self):
+        Image.new('RGB', (100, 50), 'blue').save(self.cards / '1.jpg')
+        self.cfg.read_dict({'封面设置': {
+            '生成封面': 'true', '标题': '物理错题本', '描述': '力学专题', '封面图片': '',
+        }})
+        ok, log = self.run_engine()
+        self.assertTrue(ok, log)
+        with pymupdf.open(self.out / '练习.pdf') as doc:
+            self.assertEqual(len(doc), 2)
+            r, g, b = doc[0].get_pixmap().pixel(8, 8)
+            self.assertGreater(r, 220)
+            self.assertGreater(g, 220)
+            self.assertGreater(b, 220)
+
+    def test_invalid_cover_settings_fail_without_creating_pdf(self):
+        Image.new('RGB', (100, 50), 'blue').save(self.cards / '1.jpg')
+        self.cfg.read_dict({'封面设置': {
+            '生成封面': 'true', '标题': '', '描述': '', '封面图片': '',
+        }})
+        self.assertFalse(self.run_engine()[0])
+        self.cfg['封面设置']['标题'] = '有效标题'
+        self.cfg['封面设置']['封面图片'] = str(self.base / 'missing.png')
+        self.assertFalse(self.run_engine()[0])
+        self.assertFalse((self.out / '练习.pdf').exists())
+
+    def test_long_cover_content_stays_renderable(self):
+        Image.new('RGB', (100, 50), 'blue').save(self.cards / '1.jpg')
+        self.cfg.read_dict({'封面设置': {
+            '生成封面': 'true',
+            '标题': '数学综合复习专题练习册' * 4,
+            '描述': '请记录每一次思考、每一处错误和每一个重新理解的瞬间。' * 8,
+            '封面图片': '',
+        }})
+        self.assertTrue(self.run_engine()[0])
+        with pymupdf.open(self.out / '练习.pdf') as doc:
+            self.assertEqual(len(doc), 2)
+
     def test_alpha_is_white_and_exif_is_respected(self):
         Image.new('RGBA', (80, 20), (0, 0, 0, 0)).save(self.cards / '1.png')
         card = Image.new('RGB', (20, 80), 'red')
