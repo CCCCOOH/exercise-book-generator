@@ -171,30 +171,36 @@ def _wrap_cover_text(draw, text, font, max_width):
     return lines
 
 
-def _cover_image_as_rgb(image_path):
+def _cover_image_as_rgb(image_path, background="#f4f1eb"):
     """读取用户封面图，不改变原文件，并处理透明背景和照片方向。"""
     from PIL import Image, ImageOps
 
     with Image.open(image_path) as original:
         oriented = ImageOps.exif_transpose(original)
         rgba = oriented.convert("RGBA")
-        result = Image.new("RGB", rgba.size, "#f4f1eb")
+        result = Image.new("RGB", rgba.size, background)
         result.paste(rgba, mask=rgba.getchannel("A"))
         return result
 
 
-def _paste_cover_image(canvas, source, box):
+def _paste_cover_image(canvas, source, box, mode="自动适应"):
     """等比裁切填满封面视觉区。"""
     from PIL import Image
 
     left, top, right, bottom = box
     bw, bh = right - left, bottom - top
-    scale = max(bw / source.width, bh / source.height)
+    source_ratio = source.width / max(1, source.height)
+    target_ratio = bw / max(1, bh)
+    fit = mode in {"完整显示", "fit"} or (mode in {"自动适应", "auto", ""} and abs(source_ratio / target_ratio - 1) > .18)
+    scale = min(bw / source.width, bh / source.height) if fit else max(bw / source.width, bh / source.height)
     size = (max(1, round(source.width * scale)), max(1, round(source.height * scale)))
     fitted = source.resize(size, Image.LANCZOS)
-    x = (fitted.width - bw) // 2
-    y = (fitted.height - bh) // 2
-    canvas.paste(fitted.crop((x, y, x + bw, y + bh)), (left, top))
+    if fit:
+        canvas.paste(fitted, (left + (bw - fitted.width) // 2, top + (bh - fitted.height) // 2))
+    else:
+        x = (fitted.width - bw) // 2
+        y = (fitted.height - bh) // 2
+        canvas.paste(fitted.crop((x, y, x + bw, y + bh)), (left, top))
 
 
 def make_cover_image(config, output_folder):
@@ -214,9 +220,11 @@ def make_cover_image(config, output_folder):
     title = get_str(config, "封面设置", "标题", "").strip() or "我的做题本"
     description = get_str(config, "封面设置", "描述", "").strip()
     cover_image = get_str(config, "封面设置", "封面图片", "").strip()
+    image_mode = get_str(config, "封面设置", "图片适应方式", "自动适应").strip()
+    paper_background = "#ffffff" if get_bool(config, "封面设置", "纯白色封面纸", False) else "#f7f6f2"
     quality = get_int(config, "PDF参数", "pdf_质量", 85)
 
-    canvas = Image.new("RGB", (width, height), "#f7f6f2")
+    canvas = Image.new("RGB", (width, height), paper_background)
     draw = ImageDraw.Draw(canvas)
     accent = "#2e7964"
     soft_accent = "#dcebe5"
@@ -226,8 +234,8 @@ def make_cover_image(config, output_folder):
     visual_box = (margin, visual_top, width - margin, visual_top + visual_h)
 
     if cover_image:
-        source = _cover_image_as_rgb(cover_image)
-        _paste_cover_image(canvas, source, visual_box)
+        source = _cover_image_as_rgb(cover_image, paper_background)
+        _paste_cover_image(canvas, source, visual_box, image_mode)
         # 底部浅色渐变，让长标题始终清楚易读。
         for offset in range(round(visual_h * .45)):
             y = visual_box[3] - offset - 1

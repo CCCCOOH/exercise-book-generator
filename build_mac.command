@@ -259,7 +259,23 @@ from pathlib import Path
 path = Path(sys.argv[1])
 text = path.read_text(encoding='utf-8')
 if 'pdf_maker_app.py' in text:
-    path.write_text(text.replace('pdf_maker_app.py', 'pdf_maker_gui.py'), encoding='utf-8')
+    text = text.replace('pdf_maker_app.py', 'pdf_maker_gui.py')
+if 'argv_emulation=False' in text:
+    text = text.replace('argv_emulation=False', 'argv_emulation=True')
+if 'CFBundleDocumentTypes' not in text:
+    old = "info_plist={'CFBundleDisplayName': 'SYNC题本神器', 'CFBundleName': 'SYNC题本神器'}"
+    new = """info_plist={
+        'CFBundleDisplayName': 'SYNC题本神器',
+        'CFBundleName': 'SYNC题本神器',
+        'CFBundleDocumentTypes': [{
+            'CFBundleTypeName': 'PDF document',
+            'CFBundleTypeRole': 'Viewer',
+            'LSHandlerRank': 'Alternate',
+            'LSItemContentTypes': ['com.adobe.pdf'],
+        }],
+    }"""
+    text = text.replace(old, new)
+path.write_text(text, encoding='utf-8')
 MIGRATE_SPEC
   [ "$?" = 0 ] || die "无法更新打包入口"
   ok "使用已有 spec：$SPEC"
@@ -296,7 +312,7 @@ exe = EXE(
     upx=True,
     console=False,
     disable_windowed_traceback=False,
-    argv_emulation=False,
+    argv_emulation=True,
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
@@ -315,7 +331,16 @@ app = BUNDLE(
     name='$APP_NAME.app',
     icon=$ICON_SPEC,
     bundle_identifier='com.sy.zuotibenpdf',
-    info_plist={'CFBundleDisplayName': '$APP_NAME', 'CFBundleName': '$APP_NAME'},
+    info_plist={
+        'CFBundleDisplayName': '$APP_NAME',
+        'CFBundleName': '$APP_NAME',
+        'CFBundleDocumentTypes': [{
+            'CFBundleTypeName': 'PDF document',
+            'CFBundleTypeRole': 'Viewer',
+            'LSHandlerRank': 'Alternate',
+            'LSItemContentTypes': ['com.adobe.pdf'],
+        }],
+    },
 )
 SPEC_EOF
   ok "已生成：$SPEC"

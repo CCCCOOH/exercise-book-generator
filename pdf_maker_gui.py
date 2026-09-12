@@ -53,6 +53,23 @@ if __name__ == "__main__" and "--cli" in sys.argv[1:]:
             config_path = Path(__file__).resolve().parent / "config.ini"
     sys.exit(0 if engine_main(str(config_path)) else 1)
 
+if __name__ == "__main__" and "--cli" not in sys.argv[1:]:
+    opened_pdfs = [Path(arg).expanduser() for arg in sys.argv[1:]
+                   if not arg.startswith("-") and Path(arg).expanduser().suffix.casefold() == ".pdf"]
+    if opened_pdfs:
+        from core.finder_open import run_opened_pdfs
+        if getattr(sys, "frozen", False):
+            data_root = (Path.home() / "Library" / "Application Support" if sys.platform == "darwin"
+                         else Path(os.environ.get("APPDATA", str(Path.home()))))
+            saved_config = data_root / "ZuotiBenPdfTool" / "config.ini"
+        else:
+            saved_config = Path(__file__).resolve().parent / "config.ini"
+        ok, outputs = run_opened_pdfs(opened_pdfs, saved_config)
+        if ok:
+            for folder in dict.fromkeys(output.parent for output in outputs):
+                subprocess.Popen(["open", str(folder)] if sys.platform == "darwin" else ["xdg-open", str(folder)])
+        sys.exit(0 if ok else 1)
+
 
 try:
     import tkinter as tk
@@ -136,6 +153,8 @@ DEFAULTS = {
         "标题": "我的做题本",
         "描述": "",
         "封面图片": "",
+        "图片适应方式": "自动适应",
+        "纯白色封面纸": "false",
     },
 }
 
@@ -403,6 +422,7 @@ class PdfMakerGUI:
         chosen = filedialog.askopenfilename(parent=self.root, initialdir=str(initial), title="选择题目 PDF（每页一题）", filetypes=[("PDF 文件", "*.pdf"), ("所有文件", "*.*")])
         if chosen:
             var.set(chosen)
+            self.vars[("路径设置", "pdf文件名")].set(Path(chosen).name)
 
     def _build_paper_frame(self, parent):
         frame = ttk.Frame(parent)
@@ -491,12 +511,18 @@ class PdfMakerGUI:
         self.var_cover_title = self._text_var("封面设置", "标题")
         self.var_cover_description = self._text_var("封面设置", "描述")
         self.var_cover_image = self._text_var("封面设置", "封面图片")
+        self.var_cover_image_mode = self._text_var("封面设置", "图片适应方式")
+        if self.var_cover_image_mode.get() not in ("自动适应", "裁切铺满", "完整显示"):
+            self.var_cover_image_mode.set("自动适应")
+        self.var_cover_white = tk.BooleanVar(value=self._bool_default("封面设置", "纯白色封面纸"))
         self.var_cover_summary = tk.StringVar()
         self.vars[("封面设置", "生成封面")] = self.var_cover_enabled
+        self.vars[("封面设置", "纯白色封面纸")] = self.var_cover_white
         self._cover_dialog = None
         self._cover_fields = []
         for var in (self.var_cover_enabled, self.var_cover_title,
-                    self.var_cover_description, self.var_cover_image):
+                    self.var_cover_description, self.var_cover_image,
+                    self.var_cover_image_mode, self.var_cover_white):
             var.trace_add("write", self._refresh_cover_summary)
         self._refresh_cover_summary()
 
@@ -540,7 +566,8 @@ class PdfMakerGUI:
             return
         c = self.cover_card
         c.delete("all")
-        c.create_rectangle(32, 8, 188, 224, fill="#f7f6f2", outline="#dedede")
+        paper_fill = "#ffffff" if self.var_cover_white.get() else "#f7f6f2"
+        c.create_rectangle(32, 8, 188, 224, fill=paper_fill, outline="#dedede")
         c.create_rectangle(44, 26, 176, 100, fill="#dcebe5" if not self.var_cover_image.get().strip() else "#bdd8cd", outline="")
         c.create_rectangle(44, 118, 76, 122, fill="#2e7964", outline="")
         title = self.var_cover_title.get().strip() or "我的做题本"
@@ -557,8 +584,8 @@ class PdfMakerGUI:
         dialog = tk.Toplevel(self.root)
         self._cover_dialog = dialog
         dialog.title("设计题本封面")
-        dialog.geometry("650x480")
-        dialog.minsize(600, 440)
+        dialog.geometry("680x570")
+        dialog.minsize(640, 540)
         dialog.configure(bg="#ffffff")
         dialog.transient(self.root)
         dialog.columnconfigure(0, weight=1)
@@ -589,8 +616,16 @@ class PdfMakerGUI:
         image.grid(row=0, column=0, sticky="ew", padx=(0, 6))
         choose = ttk.Button(image_row, text="选择图片", command=self._pick_cover_image)
         choose.grid(row=0, column=1)
-        hint = ttk.Label(form, text="支持 JPG、PNG、WebP、BMP、TIFF。图片会铺满封面上方视觉区。", style="Hint.TLabel", wraplength=360)
+        hint = ttk.Label(form, text="建议横图，比例约 1.6:1；推荐至少 1600 × 1000 px。尺寸或比例不同时会自动适配。支持 JPG、PNG、WebP、BMP、TIFF。", style="Hint.TLabel", wraplength=390)
         hint.pack(anchor="w", pady=(7, 0))
+        mode_row = ttk.Frame(form)
+        mode_row.pack(fill="x", pady=(10, 0))
+        ttk.Label(mode_row, text="图片适应", style="Hint.TLabel").pack(side="left")
+        image_mode = ttk.Combobox(mode_row, textvariable=self.var_cover_image_mode,
+                                  values=("自动适应", "裁切铺满", "完整显示"), state="readonly", width=12)
+        image_mode.pack(side="right")
+        white = ttk.Checkbutton(form, text="使用纯白色封面纸（关闭时为柔和米白）", variable=self.var_cover_white)
+        white.pack(anchor="w", pady=(10, 0))
         preview = ttk.Frame(dialog, padding=(8, 24, 24, 22))
         preview.grid(row=0, column=1, sticky="nsew")
         ttk.Label(preview, text="封面预览", style="Section.TLabel").pack(anchor="w")
@@ -599,7 +634,7 @@ class PdfMakerGUI:
         done = ttk.Button(preview, text="完成", style="Primary.TButton", command=dialog.withdraw)
         done.pack(fill="x")
         self._cover_enable_control = enabled
-        self._cover_fields = [title, description, image, choose]
+        self._cover_fields = [title, description, image, choose, image_mode, white]
         self.lock_widgets.extend([enabled, *self._cover_fields])
         dialog.protocol("WM_DELETE_WINDOW", dialog.withdraw)
         self._set_cover_dialog_state()
@@ -846,6 +881,7 @@ class PdfMakerGUI:
         if code == 0:
             self._log("🎉 运行完成！", "ok")
             self.var_status.set("已完成，做题本已保存到输出文件夹")
+            self.open_output_dir()
         else:
             self._log(f"❌ 运行结束，退出码 = {code}（详见上方日志）", "err")
             self.var_status.set("❌ 运行失败或已停止，请查看日志")
