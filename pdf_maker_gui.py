@@ -194,6 +194,7 @@ PAPER_PRESETS = [
 ]
 PAPER_NAMES = [name for name, _, _ in PAPER_PRESETS]
 CUSTOM_PRESET_SECTION = "自定义纸张预设"
+PAPER_DROPDOWN_INDENT = "\u2002\u2002"
 
 # ============================================================
 # 配置读写（与 GUI 解耦，便于测试/复用）
@@ -357,6 +358,8 @@ class PdfMakerGUI:
         style.map("Paper.TCombobox", fieldbackground=[("readonly", "#ffffff")],
                   selectbackground=[("readonly", "#ffffff")],
                   selectforeground=[("readonly", "#202020")])
+        style.configure("PaperDropdown.TFrame", background="#ffffff",
+                        borderwidth=1, relief="solid")
         self.root.option_add("*TCombobox*Listbox.font", (self.font, 11))
         self.root.option_add("*TCombobox*Listbox.background", "#ffffff")
         self.root.option_add("*TCombobox*Listbox.foreground", "#252525")
@@ -555,7 +558,8 @@ class PdfMakerGUI:
         self.var_paper = tk.StringVar(value=matched)
         ttk.Label(frame, text="纸张", style="Hint.TLabel").grid(row=1, column=0, sticky="w", padx=(0, 10))
         combo = ttk.Combobox(frame, textvariable=self.var_paper, state="readonly",
-                             width=22, height=12, style="Paper.TCombobox")
+                             width=22, height=12, style="Paper.TCombobox",
+                             postcommand=self._style_paper_dropdown)
         combo.grid(row=1, column=1, sticky="ew")
         manage = ttk.Button(frame, text="管理预设…", command=self.open_paper_presets)
         manage.grid(row=1, column=2, sticky="e", padx=(8, 0))
@@ -580,10 +584,43 @@ class PdfMakerGUI:
         current = self.var_paper.get()
         if current == "自定义尺寸" and current not in names:
             names.append(current)
-        self.paper_combo.configure(values=names)
+        self.paper_combo.configure(values=[self._paper_display_name(name) for name in names])
+
+    @staticmethod
+    def _paper_display_name(name):
+        return PAPER_DROPDOWN_INDENT + str(name)
+
+    @staticmethod
+    def _paper_real_name(name):
+        value = str(name)
+        return value[len(PAPER_DROPDOWN_INDENT):] if value.startswith(PAPER_DROPDOWN_INDENT) else value
+
+    def _style_paper_dropdown(self):
+        """直接样式化 ttk 内部的展开列表；收起状态的 style 不会自动传递到这里。"""
+        try:
+            popdown = self.root.tk.call("ttk::combobox::PopdownWindow", str(self.paper_combo))
+            frame = f"{popdown}.f"
+            listbox = f"{frame}.l"
+            self.root.tk.call(frame, "configure", "-style", "PaperDropdown.TFrame",
+                              "-padding", 0, "-borderwidth", 1, "-relief", "solid")
+            self.root.tk.call(listbox, "configure",
+                              "-relief", "flat",
+                              "-borderwidth", 0,
+                              "-highlightthickness", 0,
+                              "-selectborderwidth", 0,
+                              "-activestyle", "none",
+                              "-background", "#ffffff",
+                              "-foreground", "#252525",
+                              "-selectbackground", "#e6f0ec",
+                              "-selectforeground", "#1f4438")
+        except tk.TclError:
+            # 其他 Tk 主题可能使用不同的弹出窗口结构，保留基础配色。
+            pass
 
     def _apply_selected_paper(self, _event=None):
-        selected = self.var_paper.get()
+        selected = self._paper_real_name(self.var_paper.get())
+        if selected != self.var_paper.get():
+            self.var_paper.set(selected)
         for name, width, height in self._all_paper_presets():
             if name == selected:
                 self.vars[("排版参数", "页面宽度_mm")].set(width)

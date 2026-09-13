@@ -9,7 +9,7 @@ import tkinter as tk
 from tkinter import ttk
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from pdf_maker_gui import (PAPER_NAMES, PdfMakerGUI, load_config_dict,
+from pdf_maker_gui import (PAPER_DROPDOWN_INDENT, PAPER_NAMES, PdfMakerGUI, load_config_dict,
                            load_custom_paper_presets)
 
 
@@ -79,6 +79,13 @@ class GuiTests(unittest.TestCase):
         self.assertIn('平板横屏 4:3', PAPER_NAMES)
         self.assertIn('平板横屏 16:10', PAPER_NAMES)
         self.assertGreaterEqual(int(self.app.paper_combo.cget('width')), 20)
+        displayed = self.app.paper_combo.cget('values')
+        self.assertTrue(all(value.startswith(PAPER_DROPDOWN_INDENT) for value in displayed))
+        self.app._style_paper_dropdown()
+        popdown = self.root.tk.call('ttk::combobox::PopdownWindow', str(self.app.paper_combo))
+        listbox = f'{popdown}.f.l'
+        self.assertEqual(self.root.tk.call(listbox, 'cget', '-relief'), 'flat')
+        self.assertEqual(self.root.tk.call(listbox, 'cget', '-highlightthickness'), 0)
         self.app.var_paper.set('平板横屏 4:3')
         self.app._apply_selected_paper()
         self.assertEqual(self.app.vars['排版参数', '页面宽度_mm'].get(), '280')
@@ -87,7 +94,7 @@ class GuiTests(unittest.TestCase):
 
     def test_custom_paper_preset_is_persisted_selected_and_deletable(self):
         self.assertTrue(self.app._store_custom_preset('我的笔记屏', '300', '180', show_errors=False))
-        self.assertIn('我的笔记屏', self.app.paper_combo.cget('values'))
+        self.assertIn(PAPER_DROPDOWN_INDENT + '我的笔记屏', self.app.paper_combo.cget('values'))
         self.assertEqual(self.app.var_paper.get(), '我的笔记屏')
         self.assertEqual(load_custom_paper_presets(self.base / 'config.ini'), [('我的笔记屏', '300', '180')])
         self.app.save_config(show_msg=False)
@@ -95,6 +102,13 @@ class GuiTests(unittest.TestCase):
         self.assertTrue(self.app._delete_custom_preset('我的笔记屏'))
         self.assertEqual(load_custom_paper_presets(self.base / 'config.ini'), [])
         self.assertEqual(self.app.var_paper.get(), 'A4')
+
+    def test_padded_dropdown_value_is_normalized_before_applying(self):
+        self.app.var_paper.set(PAPER_DROPDOWN_INDENT + '平板横屏 16:10')
+        self.app._apply_selected_paper()
+        self.assertEqual(self.app.var_paper.get(), '平板横屏 16:10')
+        self.assertEqual(self.app.vars['排版参数', '页面宽度_mm'].get(), '256')
+        self.assertEqual(self.app.vars['排版参数', '页面高度_mm'].get(), '160')
 
     def test_custom_paper_preset_validation_rejects_builtin_or_bad_size(self):
         self.assertFalse(self.app._store_custom_preset('A4', '300', '180', show_errors=False))
