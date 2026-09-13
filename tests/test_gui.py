@@ -39,6 +39,31 @@ class GuiTests(unittest.TestCase):
         self.app._sync_input_rows()
         self.assertTrue(self.app._step_vars['执行_pdf转图片'].get())
 
+    def test_drop_pdf_or_folder_selects_the_matching_input(self):
+        pdf = self.base / '拖入题目.pdf'
+        pdf.write_bytes(b'%PDF-1.4')
+        folder = self.base / '拖入图片'
+        folder.mkdir()
+
+        self.assertTrue(self.app._handle_drop_paths([str(pdf)]))
+        self.assertEqual(self.app.var_input_type.get(), 'pdf')
+        self.assertEqual(self.app.vars['路径设置', '输入pdf文件'].get(), str(pdf))
+        self.assertEqual(self.app.vars['路径设置', 'pdf文件名'].get(), '拖入题目-题本.pdf')
+
+        self.assertTrue(self.app._handle_drop_paths([str(folder)]))
+        self.assertEqual(self.app.var_input_type.get(), 'folder')
+        self.assertEqual(self.app.vars['路径设置', '输入文件夹'].get(), str(folder))
+        self.assertEqual(self.app.vars['路径设置', 'pdf文件名'].get(), '拖入图片-题本.pdf')
+
+    def test_pdf_picker_initializes_a_non_conflicting_output_name(self):
+        pdf = self.base / '模拟卷.PDF'
+        pdf.write_bytes(b'%PDF-1.4')
+        var = self.app.vars['路径设置', '输入pdf文件']
+        with patch('pdf_maker_gui.filedialog.askopenfilename', return_value=str(pdf)):
+            self.app._pick_pdf(var)
+        self.assertEqual(var.get(), str(pdf))
+        self.assertEqual(self.app.vars['路径设置', 'pdf文件名'].get(), '模拟卷-题本.pdf')
+
     def test_controls_unlock_and_preview_validation(self):
         self.app._set_running(True)
         self.app._set_running(False)
@@ -103,11 +128,12 @@ class GuiTests(unittest.TestCase):
         self.app.vars['输出设置', '只生成pdf文件'].set(True)
         self.assertTrue(self.app._validate())
         self.assertEqual(self.app.vars['路径设置', 'pdf文件名'].get(), '中文练习.pdf')
-        self.app.start_run()
-        deadline = time.monotonic() + 20
-        while self.app.running and time.monotonic() < deadline:
-            self.root.update()
-            time.sleep(0.02)
+        with patch.object(self.app, 'open_output_dir'):
+            self.app.start_run()
+            deadline = time.monotonic() + 20
+            while self.app.running and time.monotonic() < deadline:
+                self.root.update()
+                time.sleep(0.02)
         self.assertFalse(self.app.running)
         self.assertIn('已完成', self.app.var_status.get(), self.app.log.get('1.0', 'end'))
         result = self.base / 'output' / '中文练习.pdf'

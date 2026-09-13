@@ -88,9 +88,7 @@
 
 之后每次改完源码，重新双击该脚本即可更新 `dist` 中的应用。
 
-如果只想要最终成品，可勾选界面上的**「仅保留成品 PDF，完成后清理中间文件」**（对应 `config.ini` 里的 `[输出设置] 只生成pdf文件 = true`）：
-合并PDF成功后会自动删除输出目录下的 `pages/`、`layout/` 中间文件夹，只留下最终 PDF。
-该选项仅清理输出目录中的中间结果，不会动你自己的输入文件（输入PDF、输入文件夹在清理范围内时会自动跳过）。
+也可直接把一个 PDF 或图片文件夹从 Finder 拖到「题目来源」区域。生成过程中的页面图、排版图和临时 PDF 统一放在应用专用工作区，输出文件夹只会收到已完成的成品 PDF。
 
 完成后打开输出目录获得成品！~
 
@@ -110,7 +108,6 @@ git clone https://github.com/CCCCOOH/exercise-book-generator.git
 
 ```sh
 .venv/bin/python -m unittest discover -s tests -p 'test_inputs.py' -v
-.venv/bin/python tests/test_only_pdf.py
 /Library/Frameworks/Python.framework/Versions/3.13/bin/python3 -m unittest discover -s tests -p 'test_gui.py' -v
 ```
 

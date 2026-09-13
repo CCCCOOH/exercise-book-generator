@@ -9,7 +9,7 @@ pdf_maker_gui.py — “做题本 PDF 生成工具”图形界面封装
 
     * 选择输入形式：PDF 文件（每页=一张卡片）或图片文件夹
     * 自动完成导入、排版、合并，生成完整做题本 PDF
-    * 可勾选「只生成 PDF 文件」：脚本结束后自动删除 pages/ 与 layout/ 中间文件夹
+    * 中间文件始终放在应用专用工作区，输出目录只接收完成的 PDF
     * 修改全部参数（纸张预设 A4/B5/A5…、每张纸题目数、PDF文件名…；DPI/间距/压缩质量保留在 config.ini 默认值，可按需微调）
     * 「开始生成」前自动把界面参数写回 config.ini，再后台运行 core/pdf_engine.py
     * 日志实时显示，运行中可随时「停止」
@@ -33,6 +33,8 @@ import subprocess
 import sys
 import threading
 from pathlib import Path
+
+from core import suggested_output_name
 
 # 统一入口：CLI 在加载 Tk 之前分流，兼容没有 Tk 的引擎虚拟环境。
 if __name__ == "__main__" and "--cli" in sys.argv[1:]:
@@ -80,6 +82,13 @@ except ImportError:  # pragma: no cover - 提示用户用对的解释器
     print("   /Library/Frameworks/Python.framework/Versions/3.13/bin/python3 pdf_maker_gui.py")
     print("或执行：brew install python-tk@3.13")
     sys.exit(1)
+
+try:
+    from tkinterdnd2 import COPY, DND_FILES, TkinterDnD
+except ImportError:  # 开发环境未安装时仍可使用点选导入
+    COPY = "copy"
+    DND_FILES = None
+    TkinterDnD = None
 
 
 # ============================================================
@@ -146,7 +155,7 @@ DEFAULTS = {
         "pdf_质量": "80",
     },
     "输出设置": {
-        "只生成pdf文件": "false",
+        "只生成pdf文件": "true",
     },
     "封面设置": {
         "生成封面": "false",
@@ -384,6 +393,7 @@ class PdfMakerGUI:
             button.grid(row=0, column=col, sticky="ew", padx=(0 if col == 0 else 6, 0))
             self.lock_widgets.append(button)
         self._input_rows = {}
+        self._drop_widgets = [frame, modes]
         for value, key in ((INPUT_TYPE_PDF, "输入pdf文件"), (INPUT_TYPE_FOLDER, "输入文件夹")):
             row = ttk.Frame(frame)
             row.columnconfigure(0, weight=1)
@@ -396,8 +406,12 @@ class PdfMakerGUI:
             button.grid(row=0, column=1)
             self.lock_widgets.extend([entry, button])
             self._input_rows[value] = row
+            self._drop_widgets.extend([row, entry])
         self.var_source_hint = tk.StringVar()
-        ttk.Label(frame, textvariable=self.var_source_hint, style="Hint.TLabel", wraplength=460).grid(row=3, column=0, columnspan=2, sticky="w", pady=(8, 0))
+        drop_hint = ttk.Label(frame, textvariable=self.var_source_hint, style="Hint.TLabel", wraplength=460)
+        drop_hint.grid(row=3, column=0, columnspan=2, sticky="w", pady=(8, 0))
+        self._drop_widgets.append(drop_hint)
+        self._register_drop_targets()
         # GUI always generates a complete book; legacy step switches remain usable in CLI.
         self._step_vars = {}
         for key in DEFAULTS["步骤控制"]:
@@ -414,7 +428,57 @@ class PdfMakerGUI:
             else:
                 row.grid_remove()
         self._step_vars["执行_pdf转图片"].set(source == INPUT_TYPE_PDF)
-        self.var_source_hint.set("按 PDF 页码顺序导入，每一页作为一张独立题目卡片。" if source == INPUT_TYPE_PDF else "支持 JPG、PNG、WebP、BMP、TIFF；按文件名自然排序（1、2、10），不包含子文件夹。")
+        detail = ("按 PDF 页码顺序导入，每一页作为一张独立题目卡片。"
+                  if source == INPUT_TYPE_PDF else
+                  "支持 JPG、PNG、WebP、BMP、TIFF；按文件名自然排序（1、2、10），不包含子文件夹。")
+        self.var_source_hint.set(f"可将 PDF 或图片文件夹拖到此处。{detail}")
+
+    def _register_drop_targets(self):
+        """为题目来源区注册 Finder 文件拖放。"""
+        if DND_FILES is None:
+            return
+        for widget in self._drop_widgets:
+            register = getattr(widget, "drop_target_register", None)
+            bind = getattr(widget, "dnd_bind", None)
+            if register is not None and bind is not None:
+                try:
+                    register(DND_FILES)
+                    bind("<<Drop>>", self._on_drop)
+                except tk.TclError:
+                    # A plain tk.Tk root (used by tests/embedders) has not
+                    # loaded the native tkdnd package. The normal app entry
+                    # creates TkinterDnD.Tk and takes this path successfully.
+                    return
+
+    def _on_drop(self, event):
+        try:
+            paths = list(self.root.tk.splitlist(event.data))
+        except (AttributeError, tk.TclError):
+            paths = [str(getattr(event, "data", ""))]
+        self._handle_drop_paths(paths)
+        return COPY
+
+    def _handle_drop_paths(self, paths):
+        """识别单个 PDF/文件夹并更新输入模式；与 DnD 库解耦便于测试。"""
+        cleaned = [Path(str(path)).expanduser() for path in paths if str(path).strip()]
+        if len(cleaned) != 1:
+            messagebox.showerror("无法拖入", "请每次只拖入一个 PDF 或一个图片文件夹。")
+            return False
+        path = cleaned[0]
+        if path.is_file() and path.suffix.casefold() == ".pdf":
+            self.var_input_type.set(INPUT_TYPE_PDF)
+            self.vars[("路径设置", "输入pdf文件")].set(str(path))
+            self.vars[("路径设置", "pdf文件名")].set(suggested_output_name(path))
+        elif path.is_dir():
+            self.var_input_type.set(INPUT_TYPE_FOLDER)
+            self.vars[("路径设置", "输入文件夹")].set(str(path))
+            self.vars[("路径设置", "pdf文件名")].set(suggested_output_name(path))
+        else:
+            messagebox.showerror("无法拖入", "请拖入 PDF 文件或包含题目图片的文件夹。")
+            return False
+        self._sync_input_rows()
+        self.var_status.set(f"已导入：{path.name}")
+        return True
 
     def _pick_pdf(self, var):
         raw = var.get().strip()
@@ -422,7 +486,7 @@ class PdfMakerGUI:
         chosen = filedialog.askopenfilename(parent=self.root, initialdir=str(initial), title="选择题目 PDF（每页一题）", filetypes=[("PDF 文件", "*.pdf"), ("所有文件", "*.*")])
         if chosen:
             var.set(chosen)
-            self.vars[("路径设置", "pdf文件名")].set(Path(chosen).name)
+            self.vars[("路径设置", "pdf文件名")].set(suggested_output_name(chosen))
 
     def _build_paper_frame(self, parent):
         frame = ttk.Frame(parent)
@@ -464,11 +528,10 @@ class PdfMakerGUI:
                 button = ttk.Button(frame, text="更改", command=lambda v=var: self._pick_dir(v))
                 button.grid(row=row, column=2, padx=(6, 0))
                 self.lock_widgets.append(button)
-        var = tk.BooleanVar(value=self._bool_default("输出设置", "只生成pdf文件"))
+        var = tk.BooleanVar(value=True)
         self.vars[("输出设置", "只生成pdf文件")] = var
-        check = ttk.Checkbutton(frame, text="仅保留成品 PDF，完成后清理中间文件", variable=var)
-        check.grid(row=3, column=0, columnspan=3, sticky="w", pady=(6, 0))
-        self.lock_widgets.append(check)
+        ttk.Label(frame, text="中间文件存放在应用专用工作区，这里只会出现完成的 PDF。",
+                  style="Hint.TLabel").grid(row=3, column=0, columnspan=3, sticky="w", pady=(6, 0))
         return frame
 
     def _refresh_preview(self, *_):
@@ -512,8 +575,7 @@ class PdfMakerGUI:
         self.var_cover_description = self._text_var("封面设置", "描述")
         self.var_cover_image = self._text_var("封面设置", "封面图片")
         self.var_cover_image_mode = self._text_var("封面设置", "图片适应方式")
-        if self.var_cover_image_mode.get() not in ("自动适应", "裁切铺满", "完整显示"):
-            self.var_cover_image_mode.set("自动适应")
+        self.var_cover_image_mode.set("完整显示")
         self.var_cover_white = tk.BooleanVar(value=self._bool_default("封面设置", "纯白色封面纸"))
         self.var_cover_summary = tk.StringVar()
         self.vars[("封面设置", "生成封面")] = self.var_cover_enabled
@@ -616,13 +678,13 @@ class PdfMakerGUI:
         image.grid(row=0, column=0, sticky="ew", padx=(0, 6))
         choose = ttk.Button(image_row, text="选择图片", command=self._pick_cover_image)
         choose.grid(row=0, column=1)
-        hint = ttk.Label(form, text="建议横图，比例约 1.6:1；推荐至少 1600 × 1000 px。尺寸或比例不同时会自动适配。支持 JPG、PNG、WebP、BMP、TIFF。", style="Hint.TLabel", wraplength=390)
+        hint = ttk.Label(form, text="图片会等比缩放，完整显示并居中放在标题上方。支持 JPG、PNG、WebP、BMP、TIFF。", style="Hint.TLabel", wraplength=390)
         hint.pack(anchor="w", pady=(7, 0))
         mode_row = ttk.Frame(form)
         mode_row.pack(fill="x", pady=(10, 0))
         ttk.Label(mode_row, text="图片适应", style="Hint.TLabel").pack(side="left")
         image_mode = ttk.Combobox(mode_row, textvariable=self.var_cover_image_mode,
-                                  values=("自动适应", "裁切铺满", "完整显示"), state="readonly", width=12)
+                                  values=("完整显示",), state="readonly", width=12)
         image_mode.pack(side="right")
         white = ttk.Checkbutton(form, text="使用纯白色封面纸（关闭时为柔和米白）", variable=self.var_cover_white)
         white.pack(anchor="w", pady=(10, 0))
@@ -778,13 +840,6 @@ class PdfMakerGUI:
                 if not cover_image.is_file() or cover_image.suffix.casefold() not in IMAGE_EXTENSIONS:
                     messagebox.showerror("封面图片错误", "请选择有效的封面图片。支持 JPG、PNG、WebP、BMP、TIFF。")
                     return False
-                for reserved in (output / "pages", output / "layout"):
-                    try:
-                        cover_image.resolve().relative_to(reserved.resolve())
-                        messagebox.showerror("封面图片错误", "封面图片不能位于输出目录的 pages 或 layout 中。")
-                        return False
-                    except ValueError:
-                        pass
         return True
 
     # ---------------- 运行控制 ----------------
@@ -992,7 +1047,7 @@ class PdfMakerGUI:
 
 def main():
     try:
-        root = tk.Tk()
+        root = TkinterDnD.Tk() if TkinterDnD is not None else tk.Tk()
     except tk.TclError as e:
         print("❌ 无法创建图形窗口：当前 Python 缺少完整的 Tcl/Tk 运行时。")
         print("   （uv 自带的 Python 不含 Tk；请换用 python.org 官方版，")

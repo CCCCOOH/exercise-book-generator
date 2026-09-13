@@ -124,7 +124,7 @@ fi
 ok "基础 Python：${PY}（$("$PY" -c 'import sys; print(sys.version.split()[0])')，tkinter 可用）"
 
 # ============================================================
-# 2/7 准备独立的打包环境（只装 PyInstaller + PyMuPDF + Pillow）
+# 2/7 准备独立的打包环境（只装必要依赖）
 # ============================================================
 step "2/7 准备打包环境"
 
@@ -151,7 +151,7 @@ else
 fi
 
 missing=""
-for mod in PyInstaller pymupdf PIL; do
+for mod in PyInstaller pymupdf PIL tkinterdnd2; do
   "$BUILD_PY" -c "import $mod" >/dev/null 2>&1 || missing="$missing $mod"
 done
 
@@ -178,19 +178,19 @@ if [ -n "$missing" ]; then
     export SSL_CERT_FILE="$CA_BUNDLE"
     echo "   使用 CA 证书包：$CA_BUNDLE"
   fi
-  echo "   正在安装：$BUILD_PY -m pip install pyinstaller pymupdf pillow"
+  echo "   正在安装：$BUILD_PY -m pip install pyinstaller pymupdf pillow tkinterdnd2"
   installed=0
   for attempt in 1 2 3; do
     [ "$attempt" -gt 1 ] && warn "第 $attempt 次尝试安装（网络不稳时会自动重试）…"
     if "$BUILD_PY" -m pip install --disable-pip-version-check --no-cache-dir \
-         --retries 5 --timeout 60 pyinstaller pymupdf pillow; then
+         --retries 5 --timeout 60 pyinstaller pymupdf pillow tkinterdnd2; then
       installed=1
       break
     fi
   done
   [ "$installed" = 1 ] || die "依赖安装失败（需要联网访问 PyPI）。可手动执行：
-     $BUILD_PY -m pip install pyinstaller pymupdf pillow"
-  for mod in PyInstaller pymupdf PIL; do
+     $BUILD_PY -m pip install pyinstaller pymupdf pillow tkinterdnd2"
+  for mod in PyInstaller pymupdf PIL tkinterdnd2; do
     "$BUILD_PY" -c "import $mod" >/dev/null 2>&1 || die "安装后仍无法导入 ${mod}，请检查上面的 pip 输出。"
   done
 fi
@@ -258,6 +258,28 @@ import sys
 from pathlib import Path
 path = Path(sys.argv[1])
 text = path.read_text(encoding='utf-8')
+if "collect_data_files('tkinterdnd2')" not in text:
+    if 'from PyInstaller.utils.hooks import collect_data_files' not in text:
+        text = text.replace("# -*- mode: python ; coding: utf-8 -*-",
+                            "# -*- mode: python ; coding: utf-8 -*-\nfrom PyInstaller.utils.hooks import collect_data_files")
+    text = text.replace('datas=[]', "datas=collect_data_files('tkinterdnd2')")
+if '_clone_copyfile_for_bundle' not in text:
+    marker = "app = BUNDLE("
+    clone_helper = r'''# APFS clone avoids holding a second full copy while BUNDLE is assembled.
+import shutil
+import subprocess
+_regular_copyfile = shutil.copyfile
+def _clone_copyfile_for_bundle(src, dst, *args, **kwargs):
+    try:
+        subprocess.run(['/bin/cp', '-c', src, dst], check=True,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return dst
+    except Exception:
+        return _regular_copyfile(src, dst, *args, **kwargs)
+shutil.copyfile = _clone_copyfile_for_bundle
+
+'''
+    text = text.replace(marker, clone_helper + marker)
 if 'pdf_maker_app.py' in text:
     text = text.replace('pdf_maker_app.py', 'pdf_maker_gui.py')
 if 'argv_emulation=False' in text:
@@ -283,13 +305,14 @@ else
   warn "spec 不存在（.gitignore 忽略了 *.spec），自动生成一份"
   cat > "$SPEC" <<SPEC_EOF
 # -*- mode: python ; coding: utf-8 -*-
+from PyInstaller.utils.hooks import collect_data_files
 
 
 a = Analysis(
     ['pdf_maker_gui.py'],
     pathex=[],
     binaries=[],
-    datas=[],
+    datas=collect_data_files('tkinterdnd2'),
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
@@ -326,6 +349,19 @@ coll = COLLECT(
     upx_exclude=[],
     name='$APP_NAME',
 )
+# APFS clone avoids holding a second full copy while BUNDLE is assembled.
+import shutil
+import subprocess
+_regular_copyfile = shutil.copyfile
+def _clone_copyfile_for_bundle(src, dst, *args, **kwargs):
+    try:
+        subprocess.run(['/bin/cp', '-c', src, dst], check=True,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return dst
+    except Exception:
+        return _regular_copyfile(src, dst, *args, **kwargs)
+shutil.copyfile = _clone_copyfile_for_bundle
+
 app = BUNDLE(
     coll,
     name='$APP_NAME.app',

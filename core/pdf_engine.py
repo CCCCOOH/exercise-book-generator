@@ -11,7 +11,7 @@ core/pdf_engine.py —— 做题本 PDF 生成引擎（纯 Python，无系统工
   步骤2: 排版 —— 每张纸按“每页题目数”等分成 N 个横条，
         题目在各自格内缩放适配、顶部对齐（下方留白供书写）      [Pillow]
   步骤3: 把排版好的页面合并为最终PDF（物理尺寸 = 所选纸张）     [PyMuPDF]
-  步骤4(可选): 「只生成pdf文件」模式下删除 pages/ 与 layout/ 中间文件夹
+  中间文件: 始终位于应用专用工作区，任务结束后自动删除
 
 需要：pip install pymupdf pillow
 用法：
@@ -22,6 +22,7 @@ core/pdf_engine.py —— 做题本 PDF 生成引擎（纯 Python，无系统工
 import sys
 import shutil
 import configparser
+import errno
 import re
 import tempfile
 import os
@@ -184,23 +185,16 @@ def _cover_image_as_rgb(image_path, background="#f4f1eb"):
 
 
 def _paste_cover_image(canvas, source, box, mode="自动适应"):
-    """等比裁切填满封面视觉区。"""
+    """等比完整显示封面图，并在标题上方的视觉区居中。"""
     from PIL import Image
 
     left, top, right, bottom = box
     bw, bh = right - left, bottom - top
-    source_ratio = source.width / max(1, source.height)
-    target_ratio = bw / max(1, bh)
-    fit = mode in {"完整显示", "fit"} or (mode in {"自动适应", "auto", ""} and abs(source_ratio / target_ratio - 1) > .18)
-    scale = min(bw / source.width, bh / source.height) if fit else max(bw / source.width, bh / source.height)
+    scale = min(bw / source.width, bh / source.height)
     size = (max(1, round(source.width * scale)), max(1, round(source.height * scale)))
     fitted = source.resize(size, Image.LANCZOS)
-    if fit:
-        canvas.paste(fitted, (left + (bw - fitted.width) // 2, top + (bh - fitted.height) // 2))
-    else:
-        x = (fitted.width - bw) // 2
-        y = (fitted.height - bh) // 2
-        canvas.paste(fitted.crop((x, y, x + bw, y + bh)), (left, top))
+    canvas.paste(fitted, (left + (bw - fitted.width) // 2,
+                          top + (bh - fitted.height) // 2))
 
 
 def make_cover_image(config, output_folder):
@@ -236,12 +230,6 @@ def make_cover_image(config, output_folder):
     if cover_image:
         source = _cover_image_as_rgb(cover_image, paper_background)
         _paste_cover_image(canvas, source, visual_box, image_mode)
-        # 底部浅色渐变，让长标题始终清楚易读。
-        for offset in range(round(visual_h * .45)):
-            y = visual_box[3] - offset - 1
-            alpha = 1 - offset / max(1, visual_h * .45)
-            shade = int(247 * alpha + 35 * (1 - alpha))
-            draw.line((visual_box[0], y, visual_box[2], y), fill=(shade, shade, shade))
     else:
         draw.rounded_rectangle(visual_box, radius=round(width * .025), fill=soft_accent)
         draw.ellipse((width - margin - round(width * .22), visual_top - round(width * .07),
@@ -307,7 +295,7 @@ def make_cover_image(config, output_folder):
 
 
 def validate_cover_settings(config, output_folder):
-    """验证可选封面设置，避免生成期间覆盖用户封面图。"""
+    """验证可选封面设置。"""
     if not get_bool(config, "封面设置", "生成封面", False):
         return True
     title = get_str(config, "封面设置", "标题", "").strip()
@@ -322,10 +310,6 @@ def validate_cover_settings(config, output_folder):
     if not path.is_file() or path.suffix.casefold() not in IMAGE_EXTENSIONS:
         print("❌ 封面图片不存在或格式不支持（支持 JPG、PNG、WebP、BMP、TIFF）")
         return False
-    for protected_dir in (Path(output_folder) / "pages", Path(output_folder) / "layout"):
-        if _is_inside(path, protected_dir):
-            print("❌ 封面图片位于输出 pages/layout 中，请选择其他图片以保护原文件")
-            return False
     try:
         _cover_image_as_rgb(path)
     except Exception as exc:
@@ -491,7 +475,7 @@ def step_layout_pages(config, src_folder, output_dir):
 # 步骤3: 合并为 PDF（物理尺寸=所选纸张）
 # ============================================================
 
-def step_merge_to_pdf(config, input_folder, output_folder):
+def step_merge_to_pdf(config, input_folder, output_folder, work_folder=None):
     print("\n" + "=" * 60)
     print("步骤3: 合并为PDF")
     print("=" * 60)
@@ -512,9 +496,11 @@ def step_merge_to_pdf(config, input_folder, output_folder):
 
     pt_w = mm_to_pt(page_w_mm)
     pt_h = mm_to_pt(page_h_mm)
+    work_folder = Path(work_folder or output_folder)
+    work_folder.mkdir(parents=True, exist_ok=True)
     cover_path = None
     try:
-        cover_path = make_cover_image(config, output_folder)
+        cover_path = make_cover_image(config, work_folder)
     except Exception as exc:
         print(f"❌ 生成封面失败: {exc}")
         return False
@@ -526,7 +512,7 @@ def step_merge_to_pdf(config, input_folder, output_folder):
 
     temporary = None
     try:
-        with tempfile.NamedTemporaryFile(suffix='.pdf', dir=output_folder, delete=False) as tmp:
+        with tempfile.NamedTemporaryFile(suffix='.pdf', dir=work_folder, delete=False) as tmp:
             temporary = Path(tmp.name)
         with import_pymupdf.open() as doc:
             if cover_path:
@@ -536,7 +522,17 @@ def step_merge_to_pdf(config, input_folder, output_folder):
                 page = doc.new_page(width=pt_w, height=pt_h)
                 page.insert_image(page.rect, filename=str(f))
             doc.save(str(temporary), garbage=3, deflate=True)
-        os.replace(temporary, pdf_file)
+        try:
+            # Application Support and Downloads normally share a filesystem, so
+            # the finished PDF appears atomically without a visible partial file.
+            os.replace(temporary, pdf_file)
+        except OSError as exc:
+            if exc.errno != errno.EXDEV:
+                raise
+            # External/removable output volumes cannot support an atomic rename.
+            # Copy only the already-complete final PDF; no working artifacts are
+            # ever placed beside it.
+            shutil.copyfile(temporary, pdf_file)
     except Exception as e:
         print(f"❌ 生成PDF失败: {e}")
         return False
@@ -658,7 +654,6 @@ def engine_main(config_path):
     output_folder = get_str(config, '路径设置', '输出文件夹', './output')
     input_type = resolve_input_type(config)
     pdf_file = get_str(config, '路径设置', '输入pdf文件', '')
-    only_pdf = get_bool(config, '输出设置', '只生成pdf文件', False)
 
     pdf_name = get_str(config, '路径设置', 'pdf文件名', 'output.pdf').strip()
     if not output_folder.strip() or not pdf_name or any(c in pdf_name for c in '/\\:*?"<>|') or pdf_name in {'.', '..'}:
@@ -688,61 +683,60 @@ def engine_main(config_path):
         print(f"📥 输入形式: PDF 文件（每页=一张卡片）: {pdf_file or '(未配置)'}")
     else:
         print(f"📥 输入形式: 图片文件夹: {input_folder}")
-    if only_pdf:
-        print("🗑  只生成PDF: 是（合并完成后删除 pages/ 与 layout/ 中间文件夹）")
+    print("🔒 中间文件: 仅保存在应用专用工作区，不写入输出文件夹")
     if get_bool(config, "封面设置", "生成封面", False):
         print(f"📕 封面: {get_str(config, '封面设置', '标题', '').strip()}")
     print("-" * 60)
 
-    src_folder = input_folder
-    if input_type == 'pdf':
-        if not step_pdf_to_pages(config, pdf_file, output_folder):
-            print("\n❌ 步骤失败: 执行_pdf转图片")
-            return False
-        src_folder = str(Path(output_folder) / "pages")
-    else:
-        print(f"📁 直接使用图片文件夹: {src_folder}")
-    print("-" * 60)
-
-    if get_bool(config, '步骤控制', '执行_排版页面', True):
-        if not step_layout_pages(config, src_folder, output_folder):
-            print("\n❌ 步骤失败: 执行_排版页面")
-            return False
-    else:
-        print("\n⏭️  跳过: 执行_排版页面")
-
-    layout_dir = str(Path(output_folder) / "layout")
-    merged = False
-    if get_bool(config, '步骤控制', '执行_合并pdf', True):
-        if not step_merge_to_pdf(config, layout_dir, output_folder):
-            print("\n❌ 步骤失败: 执行_合并pdf")
-            return False
-        merged = True
-    else:
-        print("\n⏭️  跳过: 执行_合并pdf")
-
-    # 只有真正拿到最终PDF后才清理中间文件，避免把生成失败的中间结果删掉
-    if only_pdf:
-        if not merged:
-            print("\n⚠️  已勾选「只生成pdf文件」，但「执行_合并pdf」未执行，跳过清理中间文件")
+    work_root = application_work_root()
+    work_root.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="job-", dir=work_root) as job:
+        job_dir = Path(job)
+        src_folder = input_folder
+        if input_type == 'pdf':
+            if not step_pdf_to_pages(config, pdf_file, job_dir):
+                print("\n❌ 步骤失败: 执行_pdf转图片")
+                return False
+            src_folder = str(job_dir / "pages")
         else:
-            if input_type == 'pdf':
-                protected = [Path(pdf_file)] if pdf_file else []
-            else:
-                protected = [Path(input_folder)]
-            cover_image = get_str(config, "封面设置", "封面图片", "").strip()
-            if cover_image:
-                protected.append(Path(cover_image))
-            step_cleanup_intermediate(output_folder, protected)
+            print(f"📁 直接使用图片文件夹: {src_folder}")
+        print("-" * 60)
+
+        if get_bool(config, '步骤控制', '执行_排版页面', True):
+            if not step_layout_pages(config, src_folder, job_dir):
+                print("\n❌ 步骤失败: 执行_排版页面")
+                return False
+        else:
+            print("\n⏭️  跳过: 执行_排版页面")
+
+        layout_dir = str(job_dir / "layout")
+        if get_bool(config, '步骤控制', '执行_合并pdf', True):
+            if not step_merge_to_pdf(config, layout_dir, output_folder, job_dir):
+                print("\n❌ 步骤失败: 执行_合并pdf")
+                return False
+        else:
+            print("\n⏭️  跳过: 执行_合并pdf")
 
     print("\n" + "=" * 60)
     print("🎉 所有步骤完成！")
     pdf_name = get_str(config, '路径设置', 'pdf文件名', 'output.pdf')
     print(f"📄 PDF文件: {Path(output_folder) / pdf_name}")
-    if only_pdf and merged:
-        print("🗑  只生成PDF模式：清理结果见上方记录，涉及用户输入的目录会保留")
+    print("🔒 应用工作区已自动清理")
     print("=" * 60)
     return True
+
+
+def application_work_root():
+    """返回不在用户输出目录中的应用专用工作区。"""
+    override = os.environ.get("ZUOTIBEN_WORK_DIR", "").strip()
+    if override:
+        return Path(override).expanduser()
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / "ZuotiBenPdfTool" / "Work"
+    if sys.platform == "win32":
+        base = Path(os.environ.get("LOCALAPPDATA", str(Path.home())))
+        return base / "ZuotiBenPdfTool" / "Work"
+    return Path.home() / ".local" / "share" / "ZuotiBenPdfTool" / "work"
 
 
 def main():

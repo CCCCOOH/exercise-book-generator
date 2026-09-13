@@ -100,8 +100,21 @@ class InputTests(unittest.TestCase):
             self.assertGreater(r, 190)
             self.assertLess(g, 80)
             self.assertLess(b, 80)
+            # The image remains visible throughout its fitted area; the cover
+            # renderer must not paint a dark gradient/block over its lower half.
+            r, g, b = pix.pixel(pix.width // 2, round(pix.height * .28))
+            self.assertGreater(r, 190)
+            self.assertLess(g, 80)
+            self.assertLess(b, 80)
             self.assertGreater(doc[1].get_pixmap().pixel(100, 30)[1], 80)
         self.assertEqual(cover.read_bytes(), original)
+        self.assertEqual(list(self.out.iterdir()), [self.out / '练习.pdf'])
+
+    def test_intermediate_files_never_appear_in_output_folder(self):
+        Image.new('RGB', (100, 50), 'blue').save(self.cards / '1.jpg')
+        self.cfg['输出设置']['只生成pdf文件'] = 'false'
+        ok, log = self.run_engine()
+        self.assertTrue(ok, log)
         self.assertEqual(list(self.out.iterdir()), [self.out / '练习.pdf'])
 
     def test_cover_without_image_uses_designed_text_page(self):
@@ -150,10 +163,11 @@ class InputTests(unittest.TestCase):
         self.cfg['输出设置']['只生成pdf文件'] = 'false'
         ok, log = self.run_engine()
         self.assertTrue(ok, log)
-        with Image.open(self.out / 'layout' / 'page-001.jpg') as page:
-            self.assertTrue(all(c > 245 for c in page.getpixel((100, 30))))
+        with pymupdf.open(self.out / '练习.pdf') as doc:
+            page = doc[0].get_pixmap(dpi=72)
+            self.assertTrue(all(c > 245 for c in page.pixel(100, 30)))
             # Rotated to landscape: red covers almost full width near top of second band.
-            r, g, b = page.getpixel((30, 440))
+            r, g, b = page.pixel(30, 440)
             self.assertGreater(r, 220)
             self.assertLess(g, 30)
 
@@ -174,8 +188,9 @@ class InputTests(unittest.TestCase):
         Image.new('RGB', (50, 50), 'red').save(source)
         original = source.read_bytes()
         self.cfg['路径设置']['输入文件夹'] = str(self.cards)
-        self.assertFalse(self.run_engine()[0])
+        self.assertTrue(self.run_engine()[0])
         self.assertEqual(source.read_bytes(), original)
+        self.assertTrue((self.out / '练习.pdf').is_file())
 
     def test_pdf_output_cannot_overwrite_source(self):
         source = self.base / 'input.pdf'

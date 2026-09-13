@@ -3,6 +3,7 @@ import configparser
 import tempfile
 from pathlib import Path
 
+from . import suggested_output_name
 from .pdf_engine import engine_main
 
 
@@ -23,8 +24,9 @@ def _build_job_config(saved_config_path, source_pdf):
     config.set("路径设置", "输入类型", "pdf")
     config.set("路径设置", "输入pdf文件", str(source_pdf))
     config.set("路径设置", "输出文件夹", str(source_pdf.parent))
-    config.set("路径设置", "pdf文件名", f"题本-{source_pdf.name}")
-    return config, source_pdf.parent / f"题本-{source_pdf.name}"
+    output_name = suggested_output_name(source_pdf)
+    config.set("路径设置", "pdf文件名", output_name)
+    return config, source_pdf.parent / output_name
 
 
 def run_opened_pdfs(pdf_paths, saved_config_path):

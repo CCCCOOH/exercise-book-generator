@@ -9,12 +9,14 @@ source = { virtual = "." }
 dependencies = [
     { name = "pillow" },
     { name = "pymupdf" },
+    { name = "tkinterdnd2" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "pillow", specifier = ">=10.0" },
     { name = "pymupdf", specifier = ">=1.28.2" },
+    { name = "tkinterdnd2", specifier = ">=0.4.3" },
 ]
 
 [[package]]
@@ -95,4 +97,13 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/e2/93/08f404a1f0155fe24137cf2d3aabd3e2b4b08c62053ed89c60f2611be3e9/pymupdf-1.28.2-cp310-abi3-win_arm64.whl", hash = "sha256:ffe91a24edc75c80da2a4b62f50fc0f54632d34fc8fe4cbc48e5c7ff07cf8fb4", size = 19759252, upload-time = "2026-08-06T21:39:12.937Z" },
     { url = "https://files.pythonhosted.org/packages/58/8c/d897dcd32a25b58186c968b15ce4324ca029e9d96460de12325314e390be/pymupdf-1.28.2-cp313-abi3-pyemscripten_2025_0_wasm32.whl", hash = "sha256:2e1b574c0fd2cb238021033fd3c0f9c4388816638df064e4bfb56d9d81736dc8", size = 18399403, upload-time = "2026-08-06T21:39:25.008Z" },
     { url = "https://files.pythonhosted.org/packages/f6/f1/de34a1c53fe2bf8c6e71db84b0ced782d408970c9810d2b456a2ae96814c/pymupdf-1.28.2-cp314-cp314t-manylinux_2_28_x86_64.whl", hash = "sha256:fd481ed48bef56305c41fb7e05a055c03345c899c7b101dad086258b438f8168", size = 25802333, upload-time = "2026-08-06T21:39:41.426Z" },
+]
+
+[[package]]
+name = "tkinterdnd2"
+version = "0.6.3"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/32/e7/50713531e91cbbd546a72f3044742fa43914bdebab3e012cccb28da5eb8a/tkinterdnd2-0.6.3.tar.gz", hash = "sha256:53ed472ec08705702e087b5664f0534ca53a07a67102255f9cdc82bc5094158b", size = 735139, upload-time = "2026-09-04T16:36:38.159Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/f4/86/fb62a6251863085d9e4ccf80cd0e55a19b91fab752a0b245d59aecade8f8/tkinterdnd2-0.6.3-py3-none-any.whl", hash = "sha256:50c7386302104bfb30d8e15b4cc53c0581bc51a28186ff4d7ad3cb2cc820c936", size = 816576, upload-time = "2026-09-04T16:36:36.456Z" },
 ]

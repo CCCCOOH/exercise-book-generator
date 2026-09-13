@@ -2,20 +2,11 @@
 # -*- coding: utf-8 -*-
 
 """
-tests/test_only_pdf.py —— 「只生成pdf文件」开关的回归测试
-========================================================
+tests/test_only_pdf.py —— 中间文件隔离的回归测试
+==================================================
 
-覆盖 core/pdf_engine.py 的步骤4（清理 pages/ 与 layout/）：
-
-    A. 勾选 + 三步全开        → 输出目录只剩最终PDF
-    B. 不勾选（默认）          → pages/ 与 layout/ 保留
-    C. 勾选但未执行合并        → 不清理，只告警
-    D. 合并失败               → 不清理任何中间结果
-    E. 输入文件夹=output/layout → 保护用户输入，不删 layout
-    E2. 输入文件夹=派生 pages/  → 属于中间产物，正常清理
-    F. 输入PDF位于 pages/ 内    → 保护用户输入，不删 pages
-    G. 输出目录已有残留中间文件夹 → 一并清理
-    H. 旧配置没有 [输出设置] 段  → 向后兼容，默认不清理
+覆盖：新旧开关值都不向输出目录写中间文件；失败任务也不残留；
+输出目录中原有用户文件不会被删除；旧配置仍向后兼容。
 
 运行（需要 .venv 里的 pymupdf/pillow）：
     .venv/bin/python tests/test_only_pdf.py
@@ -127,111 +118,47 @@ def report(title, code, out, st):
 
 
 def main():
-    # ---- A: 勾选 + 三步全开 → 只剩 output.pdf ----
-    d = setup("A")
-    code, out = engine(write_cfg(d, only_pdf="true"), d)
-    st = state(d)
-    report("A 勾选只生成pdf + 全步骤", code, out, st)
-    check("A 退出码0", code == 0)
-    check("A PDF存在", st["pdf"])
-    check("A pages已删除", not st["pages"])
-    check("A layout已删除", not st["layout"])
-    check("A 日志含清理提示", "中间文件已清理" in out)
+    # 不论旧开关的值如何，输出目录都只接收完成的 PDF。
+    for label, only_pdf in (("A 新默认配置", "true"), ("B 兼容旧关闭值", "false")):
+        d = setup(label)
+        code, out = engine(write_cfg(d, only_pdf=only_pdf), d)
+        st = state(d)
+        report(label, code, out, st)
+        check(f"{label} 退出码0", code == 0)
+        check(f"{label} PDF存在", st["pdf"])
+        check(f"{label} 无pages", not st["pages"])
+        check(f"{label} 无layout", not st["layout"])
+        check(f"{label} 专用工作区日志", "应用专用工作区" in out)
 
-    # ---- B: 不勾选 → 中间文件保留（回归） ----
-    d = setup("B")
-    code, out = engine(write_cfg(d, only_pdf="false"), d)
-    st = state(d)
-    report("B 不勾选（默认）", code, out, st)
-    check("B 退出码0", code == 0)
-    check("B PDF存在", st["pdf"])
-    check("B pages保留", st["pages"])
-    check("B layout保留", st["layout"])
-    check("B 无清理动作", "中间文件已清理" not in out)
-
-    # ---- C: 勾选但关闭合并步骤 → 不清理，仅告警 ----
+    # 失败也不应把任何工作产物留在输出目录。
     d = setup("C")
-    code, out = engine(write_cfg(d, only_pdf="true", merge="false"), d)
+    code, out = engine(write_cfg(d, layout="false"), d)
     st = state(d)
-    report("C 勾选但未合并PDF", code, out, st)
-    check("C 退出码0", code == 0)
-    check("C pages保留", st["pages"])
-    check("C layout保留", st["layout"])
-    check("C 有告警", "跳过清理中间文件" in out)
+    report("C 失败任务", code, out, st)
+    check("C 退出码非0", code != 0)
+    check("C 无PDF/pages/layout", not any(st.values()))
 
-    # ---- D: 合并失败 → 不清理任何中间结果 ----
+    # 应用不删除输出目录中本来就存在的用户文件。
     d = setup("D")
-    code, out = engine(write_cfg(d, only_pdf="true", layout="false",
-                                 input_folder="./output/layout"), d)
-    st = state(d)
-    report("D 合并失败（无 layout 可用）", code, out, st)
-    check("D 退出码非0", code != 0)
-    check("D pages保留（失败不清理）", st["pages"])
-    check("D 无清理动作", "中间文件已清理" not in out)
-
-    # ---- E: 输入文件夹就在 output/layout → 保护用户输入 ----
-    d = setup("E")
-    engine(write_cfg(d, only_pdf="false"), d)      # 先跑一遍得到真实 layout/*.jpg
-    code, out = engine(write_cfg(d, only_pdf="true", pdf2img="false", layout="false",
-                                 input_folder="./output/layout"), d)
-    st = state(d)
-    report("E 输入文件夹=./output/layout（保护用户输入）", code, out, st)
-    check("E 退出码0", code == 0)
-    check("E PDF存在", st["pdf"])
-    check("E 用户layout未被删", st["layout"])
-    check("E layout内JPG仍在", any((d / "output" / "layout").glob("*.jpg")))
-    check("E pages已删除", not st["pages"])
-    check("E 有保护告警", "包含用户输入" in out)
-
-    # ---- E2: pdf转图片开启且输入文件夹=派生的 pages/ → 允许清理 ----
-    d = setup("E2")
-    code, out = engine(write_cfg(d, only_pdf="true", input_folder="./output/pages"), d)
-    st = state(d)
-    report("E2 输入文件夹=派生的 ./output/pages", code, out, st)
-    check("E2 退出码0", code == 0)
-    check("E2 PDF存在", st["pdf"])
-    check("E2 pages已删除", not st["pages"])
-    check("E2 layout已删除", not st["layout"])
-
-    # ---- F: 输入PDF位于 pages/ 内 → 保护用户输入 ----
-    d = setup("F")
-    (d / "output" / "pages").mkdir(parents=True)
-    shutil.copy(d / "input" / "cards.pdf", d / "output" / "pages" / "cards.pdf")
-    code, out = engine(write_cfg(d, only_pdf="true",
-                                 input_pdf="./output/pages/cards.pdf"), d)
-    st = state(d)
-    report("F 输入PDF在 pages/ 内（保护用户输入）", code, out, st)
-    check("F 退出码0", code == 0)
-    check("F PDF存在", st["pdf"])
-    check("F pages未被删", st["pages"])
-    check("F 输入PDF仍在", (d / "output" / "pages" / "cards.pdf").exists())
-    check("F layout已删", not st["layout"])
-
-    # ---- G: 输出目录已有残留中间文件夹 → 一并清理 ----
-    d = setup("G")
     (d / "output" / "pages").mkdir(parents=True)
     (d / "output" / "layout").mkdir(parents=True)
-    (d / "output" / "pages" / "stale.jpg").write_bytes(b"old")
-    (d / "output" / "layout" / "stale.jpg").write_bytes(b"old")
-    code, out = engine(write_cfg(d, only_pdf="true"), d)
-    st = state(d)
-    report("G 覆盖已有残留中间文件夹", code, out, st)
-    check("G 退出码0", code == 0)
-    check("G PDF存在", st["pdf"])
-    check("G 残留pages已删", not st["pages"])
-    check("G 残留layout已删", not st["layout"])
+    page = d / "output" / "pages" / "user.jpg"
+    layout = d / "output" / "layout" / "user.jpg"
+    page.write_bytes(b"user-page")
+    layout.write_bytes(b"user-layout")
+    code, out = engine(write_cfg(d), d)
+    check("D 退出码0", code == 0)
+    check("D 保留用户pages", page.read_bytes() == b"user-page")
+    check("D 保留用户layout", layout.read_bytes() == b"user-layout")
 
-    # ---- H: 旧配置没有 [输出设置] 段 → 默认不清理 ----
-    d = setup("H")
-    cfg_path = write_cfg(d, only_pdf="true")
-    cfg_path.write_text(cfg_path.read_text(encoding="utf-8").split("[输出设置]")[0],
-                        encoding="utf-8")
+    # 旧配置没有 [输出设置] 也使用隔离工作区。
+    d = setup("E")
+    cfg_path = write_cfg(d)
+    cfg_path.write_text(cfg_path.read_text(encoding="utf-8").split("[输出设置]")[0], encoding="utf-8")
     code, out = engine(cfg_path, d)
     st = state(d)
-    report("H 旧配置无[输出设置]段", code, out, st)
-    check("H 退出码0", code == 0)
-    check("H PDF存在", st["pdf"])
-    check("H 默认不清理（向后兼容）", st["pages"] and st["layout"])
+    check("E 旧配置退出码0", code == 0)
+    check("E 旧配置仅成品", st["pdf"] and not st["pages"] and not st["layout"])
 
     shutil.rmtree(WORK, ignore_errors=True)
     bad = [n for n, ok in RESULTS if not ok]
