@@ -9,7 +9,8 @@ import tkinter as tk
 from tkinter import ttk
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from pdf_maker_gui import PdfMakerGUI, load_config_dict
+from pdf_maker_gui import (PAPER_NAMES, PdfMakerGUI, load_config_dict,
+                           load_custom_paper_presets)
 
 
 class GuiTests(unittest.TestCase):
@@ -73,6 +74,40 @@ class GuiTests(unittest.TestCase):
         self.assertIn('1–12', self.app.var_summary.get())
         self.app.vars['排版参数', '每页题目数'].set('3')
         self.assertIn('每页 3 题', self.app.var_summary.get())
+
+    def test_tablet_landscape_presets_and_dropdown_presentation(self):
+        self.assertIn('平板横屏 4:3', PAPER_NAMES)
+        self.assertIn('平板横屏 16:10', PAPER_NAMES)
+        self.assertGreaterEqual(int(self.app.paper_combo.cget('width')), 20)
+        self.app.var_paper.set('平板横屏 4:3')
+        self.app._apply_selected_paper()
+        self.assertEqual(self.app.vars['排版参数', '页面宽度_mm'].get(), '280')
+        self.assertEqual(self.app.vars['排版参数', '页面高度_mm'].get(), '210')
+        self.assertIn('280 × 210 mm', self.app.var_summary.get())
+
+    def test_custom_paper_preset_is_persisted_selected_and_deletable(self):
+        self.assertTrue(self.app._store_custom_preset('我的笔记屏', '300', '180', show_errors=False))
+        self.assertIn('我的笔记屏', self.app.paper_combo.cget('values'))
+        self.assertEqual(self.app.var_paper.get(), '我的笔记屏')
+        self.assertEqual(load_custom_paper_presets(self.base / 'config.ini'), [('我的笔记屏', '300', '180')])
+        self.app.save_config(show_msg=False)
+        self.assertEqual(load_custom_paper_presets(self.base / 'config.ini'), [('我的笔记屏', '300', '180')])
+        self.assertTrue(self.app._delete_custom_preset('我的笔记屏'))
+        self.assertEqual(load_custom_paper_presets(self.base / 'config.ini'), [])
+        self.assertEqual(self.app.var_paper.get(), 'A4')
+
+    def test_custom_paper_preset_validation_rejects_builtin_or_bad_size(self):
+        self.assertFalse(self.app._store_custom_preset('A4', '300', '180', show_errors=False))
+        self.assertFalse(self.app._store_custom_preset('太小', '10', '10', show_errors=False))
+        self.assertEqual(self.app.custom_paper_presets, [])
+
+    def test_custom_paper_preset_dialog_is_visible_and_usable(self):
+        self.app.open_paper_presets()
+        self.root.update_idletasks()
+        self.assertTrue(self.app._paper_dialog.winfo_ismapped())
+        self.assertTrue(self.app._preset_tree.winfo_ismapped())
+        self.assertGreaterEqual(self.app._paper_dialog.winfo_width(), 520)
+        self.assertGreaterEqual(self.app._paper_dialog.winfo_height(), 400)
 
     def test_cover_settings_save_and_summary(self):
         self.app.var_cover_enabled.set(True)

@@ -189,8 +189,11 @@ PAPER_PRESETS = [
     ("A6", "105", "148"),
     ("Letter", "216", "279"),
     ("Legal", "216", "356"),
+    ("平板横屏 4:3", "280", "210"),
+    ("平板横屏 16:10", "256", "160"),
 ]
 PAPER_NAMES = [name for name, _, _ in PAPER_PRESETS]
+CUSTOM_PRESET_SECTION = "自定义纸张预设"
 
 # ============================================================
 # 配置读写（与 GUI 解耦，便于测试/复用）
@@ -210,6 +213,7 @@ def normalize_input_type(value):
 def load_config_dict(config_path):
     """读取 config.ini -> {(section, key): value}，缺省值补 DEFAULT。"""
     cfg = configparser.ConfigParser(interpolation=None)
+    cfg.optionxform = str
     if Path(config_path).exists():
         cfg.read(Path(config_path), encoding="utf-8")
     result = {}
@@ -231,12 +235,51 @@ def load_config_dict(config_path):
     return result
 
 
+def load_custom_paper_presets(config_path):
+    """读取用户自定义的（名称, 宽mm, 高mm）预设，忽略损坏项。"""
+    cfg = configparser.ConfigParser(interpolation=None)
+    cfg.optionxform = str
+    if Path(config_path).exists():
+        cfg.read(Path(config_path), encoding="utf-8")
+    if not cfg.has_section(CUSTOM_PRESET_SECTION):
+        return []
+    presets = []
+    for name, raw in cfg.items(CUSTOM_PRESET_SECTION):
+        try:
+            width, height = (part.strip() for part in raw.split(",", 1))
+            if not name.strip() or int(width) <= 0 or int(height) <= 0:
+                raise ValueError
+        except (TypeError, ValueError):
+            continue
+        presets.append((name.strip(), width, height))
+    return presets
+
+
+def save_custom_paper_presets(config_path, presets):
+    """保存自定义纸张预设，不影响其他配置。"""
+    config_path = Path(config_path)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    cfg = configparser.ConfigParser(interpolation=None)
+    cfg.optionxform = str
+    if config_path.exists():
+        cfg.read(config_path, encoding="utf-8")
+    if cfg.has_section(CUSTOM_PRESET_SECTION):
+        cfg.remove_section(CUSTOM_PRESET_SECTION)
+    cfg.add_section(CUSTOM_PRESET_SECTION)
+    for name, width, height in presets:
+        cfg.set(CUSTOM_PRESET_SECTION, str(name), f"{int(width)},{int(height)}")
+    with open(config_path, "w", encoding="utf-8") as stream:
+        cfg.write(stream)
+    return config_path
+
+
 def write_config(config_path, values):
     """把 {(section, key): value} 写回 config.ini（保留文件中已有其它键）。"""
     config_path = Path(config_path)
     config_path.parent.mkdir(parents=True, exist_ok=True)
 
     cfg = configparser.ConfigParser(interpolation=None)
+    cfg.optionxform = str
     if config_path.exists():
         cfg.read(config_path, encoding="utf-8")
 
@@ -281,6 +324,7 @@ class PdfMakerGUI:
             })
 
         self.cfg_values = load_config_dict(self.config_path)
+        self.custom_paper_presets = load_custom_paper_presets(self.config_path)
         self.vars = {}          # (section,key) -> tk var
         self.lock_widgets = []  # 运行期间禁用的控件
         self._proc = None       # 正在运行的 pdf_maker 子进程
@@ -308,6 +352,16 @@ class PdfMakerGUI:
         style.configure("TEntry", padding=9, fieldbackground="#fafafa", bordercolor="#e5e5e5", lightcolor="#e5e5e5", darkcolor="#e5e5e5")
         style.configure("TCombobox", padding=8, fieldbackground="#fafafa", arrowsize=14)
         style.map("TCombobox", fieldbackground=[("readonly", "#fafafa")], selectbackground=[("readonly", "#fafafa")], selectforeground=[("readonly", "#292929")])
+        style.configure("Paper.TCombobox", padding=(10, 7), font=(self.font, 12),
+                        fieldbackground="#ffffff", bordercolor="#d6d6d6", arrowsize=14)
+        style.map("Paper.TCombobox", fieldbackground=[("readonly", "#ffffff")],
+                  selectbackground=[("readonly", "#ffffff")],
+                  selectforeground=[("readonly", "#202020")])
+        self.root.option_add("*TCombobox*Listbox.font", (self.font, 11))
+        self.root.option_add("*TCombobox*Listbox.background", "#ffffff")
+        self.root.option_add("*TCombobox*Listbox.foreground", "#252525")
+        self.root.option_add("*TCombobox*Listbox.selectBackground", "#dcebe5")
+        self.root.option_add("*TCombobox*Listbox.selectForeground", "#202020")
         style.configure("TButton", padding=(14, 9), background="#f3f3f3", borderwidth=0, focusthickness=0)
         style.map("TButton", background=[("active", "#e8e8e8")])
         style.configure("Primary.TButton", background="#252525", foreground="#ffffff", font=(self.font, 12, "bold"), padding=(22, 12))
@@ -333,11 +387,11 @@ class PdfMakerGUI:
         self.lock_widgets.append(cover)
         tk.Label(sidebar, text="本地处理 · 专注练习\n题目文件留在你的设备上", justify="left", bg="#f7f7f8", fg="#969696", font=(self.font, 10)).pack(side="bottom", anchor="w", padx=22, pady=24)
 
-        main = ttk.Frame(self.root, padding=(32, 18, 32, 16))
+        main = ttk.Frame(self.root, padding=(32, 12, 32, 12))
         main.pack(side="left", fill="both", expand=True)
         ttk.Label(main, text="做题本工作台", style="Hint.TLabel").pack(anchor="w")
-        ttk.Label(main, text="把题目，变成你的下一次进步。", font=(self.font, 24, "bold")).pack(anchor="w", pady=(16, 6))
-        ttk.Label(main, text="导入题目卡片，设置纸张与留白，一键生成适合打印的 PDF。", style="Hint.TLabel").pack(anchor="w", pady=(0, 22))
+        ttk.Label(main, text="把题目，变成你的下一次进步。", font=(self.font, 24, "bold")).pack(anchor="w", pady=(10, 4))
+        ttk.Label(main, text="导入题目卡片，设置纸张与留白，一键生成适合打印的 PDF。", style="Hint.TLabel").pack(anchor="w", pady=(0, 16))
 
         body = ttk.Frame(main)
         body.pack(fill="x")
@@ -346,8 +400,8 @@ class PdfMakerGUI:
         editor = ttk.Frame(body)
         editor.grid(row=0, column=0, sticky="nsew", padx=(0, 28))
         self._build_path_frame(editor).pack(fill="x")
-        self._build_paper_frame(editor).pack(fill="x", pady=(16, 0))
-        self._build_output_frame(editor).pack(fill="x", pady=(16, 0))
+        self._build_paper_frame(editor).pack(fill="x", pady=(12, 0))
+        self._build_output_frame(editor).pack(fill="x", pady=(12, 0))
 
         preview = ttk.Frame(body)
         preview.grid(row=0, column=1, sticky="n")
@@ -490,29 +544,163 @@ class PdfMakerGUI:
 
     def _build_paper_frame(self, parent):
         frame = ttk.Frame(parent)
-        ttk.Label(frame, text="02  排版设置", style="Section.TLabel").grid(row=0, column=0, columnspan=4, sticky="w", pady=(0, 12))
+        frame.columnconfigure(1, weight=1)
+        ttk.Label(frame, text="02  排版设置", style="Section.TLabel").grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 12))
         var_w = self._text_var("排版参数", "页面宽度_mm")
         var_h = self._text_var("排版参数", "页面高度_mm")
         for section, key in (("排版参数", "dpi"), ("排版参数", "间距_mm"), ("PDF参数", "pdf_质量")):
             self._hidden_text(section, key)
-        matched = next((name for name, w, h in PAPER_PRESETS if (w, h) == (var_w.get(), var_h.get())), "自定义")
+        matched = next((name for name, w, h in self._all_paper_presets()
+                        if (w, h) == (var_w.get(), var_h.get())), "自定义尺寸")
         self.var_paper = tk.StringVar(value=matched)
-        ttk.Label(frame, text="纸张", style="Hint.TLabel").grid(row=1, column=0, sticky="w", padx=(0, 8))
-        combo = ttk.Combobox(frame, textvariable=self.var_paper, values=PAPER_NAMES + (["自定义"] if matched == "自定义" else []), state="readonly", width=9)
-        combo.grid(row=1, column=1, sticky="w")
-        ttk.Label(frame, text="每页题目", style="Hint.TLabel").grid(row=1, column=2, sticky="w", padx=(20, 8))
+        ttk.Label(frame, text="纸张", style="Hint.TLabel").grid(row=1, column=0, sticky="w", padx=(0, 10))
+        combo = ttk.Combobox(frame, textvariable=self.var_paper, state="readonly",
+                             width=22, height=12, style="Paper.TCombobox")
+        combo.grid(row=1, column=1, sticky="ew")
+        manage = ttk.Button(frame, text="管理预设…", command=self.open_paper_presets)
+        manage.grid(row=1, column=2, sticky="e", padx=(8, 0))
+        ttk.Label(frame, text="每页题目", style="Hint.TLabel").grid(row=2, column=0, sticky="w", pady=(9, 0), padx=(0, 10))
         count = ttk.Spinbox(frame, from_=1, to=12, textvariable=self._text_var("排版参数", "每页题目数"), width=4)
-        count.grid(row=1, column=3, sticky="w")
-        self.lock_widgets.extend([combo, count])
-        def on_paper_change(_event=None):
-            for name, w, h in PAPER_PRESETS:
-                if name == self.var_paper.get():
-                    var_w.set(w)
-                    var_h.set(h)
-                    break
-            self._refresh_preview()
-        combo.bind("<<ComboboxSelected>>", on_paper_change)
+        count.grid(row=2, column=1, sticky="w", pady=(9, 0))
+        self.paper_combo = combo
+        self._paper_manage_button = manage
+        self._paper_dialog = None
+        self._refresh_paper_combo()
+        self.lock_widgets.extend([combo, manage, count])
+        combo.bind("<<ComboboxSelected>>", self._apply_selected_paper)
         return frame
+
+    def _all_paper_presets(self):
+        return [*PAPER_PRESETS, *self.custom_paper_presets]
+
+    def _refresh_paper_combo(self):
+        if not hasattr(self, "paper_combo"):
+            return
+        names = [name for name, _, _ in self._all_paper_presets()]
+        current = self.var_paper.get()
+        if current == "自定义尺寸" and current not in names:
+            names.append(current)
+        self.paper_combo.configure(values=names)
+
+    def _apply_selected_paper(self, _event=None):
+        selected = self.var_paper.get()
+        for name, width, height in self._all_paper_presets():
+            if name == selected:
+                self.vars[("排版参数", "页面宽度_mm")].set(width)
+                self.vars[("排版参数", "页面高度_mm")].set(height)
+                break
+        self._refresh_preview()
+
+    def _store_custom_preset(self, name, width, height, show_errors=True):
+        name = str(name).strip()
+        try:
+            width, height = int(width), int(height)
+            valid_size = 20 <= width <= 1000 and 20 <= height <= 1000
+        except (TypeError, ValueError):
+            valid_size = False
+        invalid_name = (not name or len(name) > 30 or
+                        any(char in name for char in "=[]\n\r") or
+                        name in PAPER_NAMES or name == "自定义尺寸")
+        if invalid_name or not valid_size:
+            if show_errors:
+                messagebox.showerror("预设无效", "请输入不与内置预设重名的名称（最多 30 字），宽高需为 20–1000 mm 的整数。",
+                                     parent=self._paper_dialog or self.root)
+            return False
+        replacement = (name, str(width), str(height))
+        for index, preset in enumerate(self.custom_paper_presets):
+            if preset[0] == name:
+                self.custom_paper_presets[index] = replacement
+                break
+        else:
+            self.custom_paper_presets.append(replacement)
+        try:
+            save_custom_paper_presets(self.config_path, self.custom_paper_presets)
+        except OSError as exc:
+            if show_errors:
+                messagebox.showerror("无法保存预设", str(exc), parent=self._paper_dialog or self.root)
+            return False
+        self._refresh_paper_combo()
+        self.var_paper.set(name)
+        self._apply_selected_paper()
+        self._refresh_custom_preset_list()
+        return True
+
+    def _delete_custom_preset(self, name):
+        remaining = [preset for preset in self.custom_paper_presets if preset[0] != name]
+        if len(remaining) == len(self.custom_paper_presets):
+            return False
+        self.custom_paper_presets = remaining
+        save_custom_paper_presets(self.config_path, self.custom_paper_presets)
+        if self.var_paper.get() == name:
+            self.var_paper.set("A4")
+            self._apply_selected_paper()
+        self._refresh_paper_combo()
+        self._refresh_custom_preset_list()
+        return True
+
+    def _refresh_custom_preset_list(self):
+        tree = getattr(self, "_preset_tree", None)
+        if tree is None or not tree.winfo_exists():
+            return
+        tree.delete(*tree.get_children())
+        for name, width, height in self.custom_paper_presets:
+            tree.insert("", "end", iid=name, values=(name, f"{width} × {height} mm"))
+
+    def open_paper_presets(self):
+        if self._paper_dialog and self._paper_dialog.winfo_exists():
+            self._paper_dialog.deiconify()
+            self._paper_dialog.lift()
+            return
+        dialog = tk.Toplevel(self.root)
+        self._paper_dialog = dialog
+        dialog.title("管理纸张预设")
+        dialog.geometry("560x440")
+        dialog.minsize(520, 400)
+        dialog.transient(self.root)
+        dialog.configure(bg="#ffffff")
+        content = ttk.Frame(dialog, padding=24)
+        content.pack(fill="both", expand=True)
+        ttk.Label(content, text="自定义纸张预设", font=(self.font, 18, "bold")).pack(anchor="w")
+        ttk.Label(content, text="输入横向尺寸时，请让宽度大于高度。保存后会立即出现在纸张下拉框中。",
+                  style="Hint.TLabel").pack(anchor="w", pady=(5, 16))
+        fields = ttk.Frame(content)
+        fields.pack(fill="x")
+        fields.columnconfigure(0, weight=1)
+        name_var = tk.StringVar()
+        width_var = tk.StringVar(value="280")
+        height_var = tk.StringVar(value="210")
+        ttk.Label(fields, text="预设名称", style="Hint.TLabel").grid(row=0, column=0, sticky="w")
+        ttk.Label(fields, text="宽 mm", style="Hint.TLabel").grid(row=0, column=1, sticky="w", padx=(10, 0))
+        ttk.Label(fields, text="高 mm", style="Hint.TLabel").grid(row=0, column=2, sticky="w", padx=(10, 0))
+        ttk.Entry(fields, textvariable=name_var).grid(row=1, column=0, sticky="ew")
+        ttk.Entry(fields, textvariable=width_var, width=8).grid(row=1, column=1, padx=(10, 0))
+        ttk.Entry(fields, textvariable=height_var, width=8).grid(row=1, column=2, padx=(10, 0))
+        add = ttk.Button(fields, text="添加 / 更新",
+                         command=lambda: self._store_custom_preset(name_var.get(), width_var.get(), height_var.get()))
+        add.grid(row=1, column=3, padx=(10, 0))
+        tree = ttk.Treeview(content, columns=("name", "size"), show="headings", height=8)
+        tree.heading("name", text="名称")
+        tree.heading("size", text="尺寸")
+        tree.column("name", width=250, anchor="w")
+        tree.column("size", width=180, anchor="center")
+        tree.pack(fill="both", expand=True, pady=(18, 10))
+        self._preset_tree = tree
+        def load_selected(_event=None):
+            selected = tree.selection()
+            if not selected:
+                return
+            preset = next(item for item in self.custom_paper_presets if item[0] == selected[0])
+            name_var.set(preset[0])
+            width_var.set(preset[1])
+            height_var.set(preset[2])
+        tree.bind("<<TreeviewSelect>>", load_selected)
+        actions = ttk.Frame(content)
+        actions.pack(fill="x")
+        ttk.Button(actions, text="删除选中预设",
+                   command=lambda: self._delete_custom_preset(tree.selection()[0]) if tree.selection() else None).pack(side="left")
+        ttk.Button(actions, text="完成", style="Primary.TButton", command=dialog.withdraw).pack(side="right")
+        dialog.protocol("WM_DELETE_WINDOW", dialog.withdraw)
+        self._refresh_custom_preset_list()
 
     def _build_output_frame(self, parent):
         frame = ttk.Frame(parent)

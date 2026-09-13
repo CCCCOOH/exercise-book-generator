@@ -131,6 +131,17 @@ class InputTests(unittest.TestCase):
             self.assertGreater(g, 220)
             self.assertGreater(b, 220)
 
+    def test_tablet_landscape_output_uses_selected_aspect_ratio(self):
+        Image.new('RGB', (200, 50), 'blue').save(self.cards / '1.jpg')
+        self.cfg['排版参数']['页面宽度_mm'] = '280'
+        self.cfg['排版参数']['页面高度_mm'] = '210'
+        ok, log = self.run_engine()
+        self.assertTrue(ok, log)
+        with pymupdf.open(self.out / '练习.pdf') as doc:
+            self.assertAlmostEqual(doc[0].rect.width, engine.mm_to_pt(280), places=3)
+            self.assertAlmostEqual(doc[0].rect.height, engine.mm_to_pt(210), places=3)
+            self.assertGreater(doc[0].rect.width, doc[0].rect.height)
+
     def test_invalid_cover_settings_fail_without_creating_pdf(self):
         Image.new('RGB', (100, 50), 'blue').save(self.cards / '1.jpg')
         self.cfg.read_dict({'封面设置': {
